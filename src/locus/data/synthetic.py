@@ -56,6 +56,8 @@ class GroundTruthFrame:
     object_position_world: dict[str, np.ndarray]
     object_visible: dict[str, bool]
     object_bearing_body: dict[str, float]
+    object_mask: dict[str, np.ndarray] = field(default_factory=dict)  # visible objects only
+    object_box_norm: dict[str, tuple] = field(default_factory=dict)  # visible objects only
 
 
 @dataclass
@@ -180,6 +182,8 @@ def _generate(
                 object_position_world=object_position_world,
                 object_visible=dict(visibility),
                 object_bearing_body=object_bearing_body,
+                object_mask={oid: d[0] for oid, d in detections.items()},
+                object_box_norm={oid: d[1] for oid, d in detections.items()},
             )
         )
 
@@ -194,8 +198,13 @@ def straight_walk(duration_s: float = 3.0, seed: int = 0):
 
 def head_turn_away(yaw_deg: float = 60.0, hold_s: float = 4.0, seed: int = 0):
     """The headline scenario: an object exits view as the head yaws away,
-    while the wearer keeps walking straight ahead."""
-    objects = [SyntheticObject("chair", "chair_1", np.array([2.0, 0.0, 8.0]))]
+    while the wearer keeps walking straight ahead.
+
+    The object is placed far enough ahead (30m) that the wearer's own
+    forward walking during the hold period can't close the gap enough to
+    swing it back into frustum by translation alone -- only the yaw
+    controls visibility here, which is the point of the scenario."""
+    objects = [SyntheticObject("chair", "chair_1", np.array([3.0, 0.0, 30.0]))]
     lead_in_s, ramp_s = 1.0, 0.5
 
     def yaw_fn(t: float) -> float:
@@ -213,8 +222,12 @@ def head_turn_away(yaw_deg: float = 60.0, hold_s: float = 4.0, seed: int = 0):
 
 def head_turn_return(yaw_deg: float = 60.0, away_s: float = 4.0, seed: int = 0):
     """head_turn_away, then the head yaws back -- the re-identification test:
-    the object re-entering view must bind to the same node_id."""
-    objects = [SyntheticObject("chair", "chair_1", np.array([2.0, 0.0, 8.0]))]
+    the object re-entering view must bind to the same node_id.
+
+    Same far-away placement as head_turn_away, for the same reason: the
+    wearer's forward walking over the (longer) away+return duration must
+    not by itself swing the object back into frustum before the yaw does."""
+    objects = [SyntheticObject("chair", "chair_1", np.array([3.0, 0.0, 30.0]))]
     lead_in_s, ramp_s, settle_s = 1.0, 0.5, 2.0
 
     def yaw_fn(t: float) -> float:

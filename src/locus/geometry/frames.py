@@ -51,9 +51,14 @@ def world_to_body(
     return r_world_body.T @ (p_world - body_origin_world)
 
 
+def bearing_rad(p_body: np.ndarray) -> float:
+    """Body-frame position -> signed angle from straight-ahead, radians."""
+    x, _, z = p_body
+    return float(np.arctan2(x, z))
+
+
 def bearing_clockface(p_body: np.ndarray) -> float:
     """Body-frame position -> clock position in [1, 12]. 12 = straight ahead."""
-    x, _, z = p_body
-    angle_deg = np.degrees(np.arctan2(x, z)) % 360.0
+    angle_deg = np.degrees(bearing_rad(p_body)) % 360.0
     clock = angle_deg / 30.0
     return clock if clock > 1e-9 else 12.0
