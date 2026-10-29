@@ -1,0 +1,44 @@
+# Locus default config. Loaded by src/locus/config.py, overridable by env vars
+# (LOCUS_<SECTION>__<KEY>, e.g. LOCUS_HAZARD__TTC_THRESHOLD_SECONDS=1.5).
+
+device: auto  
+
+perception:
+  max_concepts: 6
+  concept_dwell_seconds: 5.0
+  proposer_interval_seconds: 1.5
+
+memory:
+  node_decay_half_life_seconds: 8.0
+  node_eviction_seconds: 20.0
+  edge_radius_m: 4.0
+  reacquire_bearing_tolerance_rad: 0.35
+
+kinematics:
+  walking_speed_mps: 1.4
+
+hazard:
+  ttc_threshold_seconds: 2.0
+
+image:
+  width: 640
+  height: 480
+
+tts:
+  backend: null   
+
+paths:
+  dataset_dir: /home/iairo-dgx1/vision_datasets/hackathon/aea
+  dataset_manifest: /home/iairo-dgx1/vision_datasets/hackathon/aea/selected_sequences.json
+  sam3_repo: /home/iairo-dgx1/vision_datasets/hackathon/repos/sam3
+  sam31_checkpoint_hf_repo: facebook/sam3.1   
+
+aea_sequences:
+  - loc5_script4_seq6_rec1
+  - loc4_script1_seq1_rec1
+  - loc3_script5_seq6_rec1
+  - loc2_script2_seq4_rec2
+  - loc1_script3_seq1_rec1
+  - loc3_script5_seq3_rec1
+  - loc3_script4_seq7_rec1
+  - loc3_script3_seq1_rec1

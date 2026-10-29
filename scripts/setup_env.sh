@@ -9,7 +9,7 @@
 set -euo pipefail
 
 ENV_NAME="hackathon"
-SAM3_REPO="/home/iairo-dgx1/vad_data/hackathon/repos/sam3"
+SAM3_REPO="/home/iairo-dgx1/vision_datasets/hackathon/repos/sam3"
 
 conda create -n "$ENV_NAME" python=3.12 -y
 

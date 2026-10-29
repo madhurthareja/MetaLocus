@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "locus"
+version = "0.1.0"
+description = "Spatial working memory for assistive egocentric navigation"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "scipy",
+    "opencv-python-headless",
+    "pillow",
+    "pydantic",
+    "pyyaml",
+    "rich",
+    "typer",
+    "soundfile",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "hypothesis"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

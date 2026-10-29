@@ -1,0 +1,7 @@
+.env
+outputs/
+*.pt
+__pycache__/
+scripts/*_log.txt
+vendor/
+.venv/

@@ -1,0 +1,14 @@
+numpy
+scipy
+opencv-python-headless
+pillow
+pydantic
+pyyaml
+rich
+typer
+soundfile
+
+[dev]
+pytest
+pytest-cov
+hypothesis
