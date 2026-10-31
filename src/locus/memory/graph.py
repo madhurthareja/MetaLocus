@@ -81,6 +81,51 @@ class SpatialMemoryGraph:
             node.confidence = 1.0
             self._instance_to_node[instance.instance_id] = node_id
 
+        self._merge_duplicate_nodes()
+
+    def _merge_duplicate_nodes(self) -> None:
+        """Two different instance_ids for the same physical object each get
+        their own node at creation time if they miss the association gate
+        then (noisy depth, or a segmenter tracker briefly emitting two
+        overlapping detections for one object before its own de-duplication
+        converges -- confirmed happening with SAM 3.1's multiplex tracker on
+        a short real clip). The gate is checked only once, at creation, so
+        two such nodes can keep existing side by side even after later
+        observations bring them within the gate of each other. This re-checks
+        every same-concept pair after each observe() and merges any that are
+        now within the gate, so a late-arriving duplicate still collapses."""
+        by_concept: dict[str, list[int]] = {}
+        for node_id, node in self.nodes.items():
+            by_concept.setdefault(node.concept, []).append(node_id)
+
+        merged: set[int] = set()
+        for node_ids in by_concept.values():
+            for i, id_a in enumerate(node_ids):
+                if id_a in merged:
+                    continue
+                for id_b in node_ids[i + 1 :]:
+                    if id_b in merged:
+                        continue
+                    dist = float(np.linalg.norm(self.nodes[id_a].p_world - self.nodes[id_b].p_world))
+                    if dist < self.association_gate_m:
+                        self._merge_into(id_a, id_b)
+                        merged.add(id_b)
+
+    def _merge_into(self, keep: int, drop: int) -> None:
+        keeper, loser = self.nodes[keep], self.nodes[drop]
+        if loser.last_seen > keeper.last_seen:
+            keep, drop = drop, keep
+            keeper, loser = loser, keeper
+
+        keeper.observation_count += loser.observation_count
+        keeper.first_seen = min(keeper.first_seen, loser.first_seen)
+        keeper.confidence = max(keeper.confidence, loser.confidence)
+
+        for instance_id, node_id in self._instance_to_node.items():
+            if node_id == drop:
+                self._instance_to_node[instance_id] = keep
+        del self.nodes[drop]
+
     def step(self, t: float) -> None:
         evicted = []
         for node_id, node in self.nodes.items():

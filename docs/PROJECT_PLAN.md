@@ -1,4 +1,4 @@
-# Autonomous Egocentric Hazard Agent
+# Locus
 
 Meta Global AI Developer Hackathon · Track: **Indie developer** (team of 2) · Theme: leading with **Push the Frontier** (technical-depth/benchmark narrative fits better than Build for Your World's domain-problem framing, but it's a pitch choice, not a hard category — revisit if desired) · Inference box: NVIDIA DGX Spark (GB10, 128GB unified memory, ARM64/Grace-Blackwell)
 
@@ -18,22 +18,27 @@ An edge-compute assistive navigation system: first-person video → open-world s
 
 **Prior art to cite, not compete with:** SAM 3 Agent (MLLM proposes noun phrases → SAM 3 masks → iterate, 76.0 gIoU on ReasonSeg) already does "VLM writes SAM's vocabulary" for single images with no state. Our contribution is the temporal/persistence extension, now applied to a physical-safety task: spatial working memory over a concept-segmentation backbone, driving autonomous hazard alerts instead of answering one-off queries.
 
+**This is not a toy problem we invented a dataset-proxy for.** Google Research built SANPO (Scene understanding, Accessibility, Navigation, Pathfinding, Obstacle avoidance) specifically for outdoor BLV (blind/low-vision) navigation, and it already trains Project Guideline — a real, shipping Google product that helps low-vision users run outdoors independently. The pitch and the primary dataset are the same problem statement, not a reframe.
+
 ## 2. Why this framing over a pure benchmark
 
-A teammate proposed an "Autonomous Egocentric Hazard Agent" built on EgoObjects + a trained GATv2 scene graph. Two pieces of that were reconsidered and the decisions below reflect what was agreed:
+A teammate proposed an "Autonomous Egocentric Hazard Agent" built on EgoObjects + a trained GATv2 scene graph. The decisions below reflect what was agreed, including a dataset correction made after further scrutiny (see §3):
 
-- **Dataset: AEA only, not EgoObjects.** EgoObjects is Meta's own egocentric dataset and is well-aligned optically with the sponsor, but it ships frames without ground-truth depth, 6-DoF pose, or a point cloud. Hazard detection is fundamentally a distance/closing-speed problem — without AEA's free depth you'd need to reintroduce a monocular depth model, which is exactly the fragile component AEA lets us delete (see §3). AEA's cluttered kitchen/laundry-pile sequences are reframed as the hazard scenarios for this project (a chair leg, a bag on the floor, a pet, a low table), which is a reasonable proxy for "obstacles in a visually impaired user's path" without needing a literal mobility dataset.
 - **No GATv2.** The original plan to train a GATv2 on Glimmer-extracted spatial triplets has no labeled training signal available in the timeline, and an undertrained GNN is a worse hazard detector than honest geometry. Time-to-collision is computed directly: `distance ÷ closing speed`, from the 3D positions already produced by the depth/pose pipeline. This is fully explainable to a judge and costs zero training time. "Scene graph" in this plan means an explicit, geometrically-built graph (nodes = tracked objects with 3D position + confidence decay, edges = computed spatial/kinematic relations), not a learned GNN.
+- **Not EgoObjects.** EgoObjects is Meta's own egocentric dataset and is well-aligned optically with the sponsor, but it ships frames without ground-truth depth, 6-DoF pose, or a point cloud. Hazard detection is fundamentally a distance/closing-speed problem; EgoObjects would force reintroducing a monocular depth model, exactly the fragile component a real-depth dataset lets us delete.
+- **Not a household-clutter proxy, either.** An earlier version of this plan used AEA (Project Aria Everyday Activities, indoor) as the primary scored dataset, reframing kitchen counters and laundry piles as "hazard proxies." That framing doesn't survive scrutiny — a laundry pile is not a mobility hazard, and a judge will correctly push on it. The fix isn't a better proxy, it's the right dataset: see §3.
 
 ## 3. Dataset
 
-- **Primary, scored:** Project Aria Everyday Activities (AEA) via `projectaria_tools`. ~8 of 143 sequences, prioritizing cluttered/occluded scenes (kitchen counters, laundry piles, hallways with obstacles) as hazard proxies.
-  - Gives for free: 1kHz 6-DoF trajectory, semi-dense static-scene point cloud, per-frame 3D eye gaze, aligned speech.
+- **Primary, scored: SANPO** (outdoor, real-world). Purpose-built by Google Research for exactly this problem — outdoor BLV navigation — and already powers Project Guideline in production. No reframing needed: a car at 6.5m closing at 1.8s TTC *is* the hazard this project warns about, not a stand-in for one.
+  - Real dense stereo depth per frame (~95-98% valid-pixel coverage, measured directly against this project's own lifting code — far denser than AEA's point-cloud projection), real 6-DoF pose from two simultaneous cameras (head + chest-mounted), and already-pinhole intrinsics (no fisheye correction needed).
+  - Public, ungated Google Cloud Storage bucket (`gs://gresearch/sanpo_dataset/v0`, CC-BY 4.0) — no gated-access approval delay, unlike SAM 3.1's own HF gating.
+  - Outdoor concepts (car, truck, person, obstacle) map directly onto real sidewalk/street hazards, with per-session scene metadata (traffic level, obstacle density, weather) that lets scenes be chosen deliberately rather than by trial and error.
+- **Secondary, cross-dataset validation: AEA** (indoor, via `projectaria_tools`). Kept not as a hazard-proxy narrative but for a legitimate, different reason: it's a second, independently-sourced dataset (different sensor, different depth modality — semi-dense point-cloud projection rather than dense stereo) that the exact same pipeline (SAM 3.1 segmenter, persistent memory graph, TTC math) runs against unchanged, demonstrating the architecture generalizes rather than being tuned to one dataset's quirks.
   - Report main numbers on the **open-loop** trajectory (real-time odometry), not closed-loop — the honest "this would run on real glasses" claim.
-  - Depth: project semi-dense points into each SAM mask, take the median as object depth (monocular fallback only for masks with too few points). This same depth feeds both the scene-graph positions and the TTC hazard computation.
+  - Depth: project the semi-dense point cloud into each SAM mask, take the median as object depth. This is real depth, just far sparser than SANPO's (~18% vs. ~96% coverage) — an honest, demonstrated limitation of AEA specifically, not of the approach.
   - RGB is fisheye — undistort via `projectaria_tools` calibration, which also yields pinhole intrinsics K.
-- **Demo-only, qualitative:** scripted phone walkthrough for the split-screen video (see §7). Labeled explicitly as qualitative, not part of the scored benchmark.
-- EgoObjects: considered and rejected for the reasons in §2. Revisit only if AEA scenes prove too depth/pose-rich but too hazard-poor and extra object-category variety is worth the depth tradeoff — not expected to be needed.
+- EgoObjects: considered and rejected for the reasons in §2.
 
 ## 4. Benchmark (technical-depth evidence underneath the demo)
 
@@ -69,15 +74,15 @@ Do **not** use: SAM 3.1 via Meta Model API for video (text-prompt-only, ~$270/hr
 
 ## 6. Architecture
 
-1. SAM 3.1 runs 4-6 parallel native sessions (one per concept slot), each ingesting AEA frames with its own text prompt, concepts chosen by Spark (~0.5Hz refresh — slots, not a fixed list).
-2. Masks + undistorted frame → project AEA point cloud into each mask → median depth → 3D position in world frame via AEA 6-DoF pose (open-loop).
+1. SAM 3.1 runs 4-6 parallel native sessions (one per concept slot), each ingesting frames from either dataset with its own text prompt, concepts chosen by Spark (~0.5Hz refresh — slots, not a fixed list).
+2. Masks + frame → median depth over each mask (SANPO: read directly from its dense stereo map; AEA: project its semi-dense point cloud into the mask first) → 3D position in world frame via the sequence's own 6-DoF pose (open-loop for AEA).
 3. Scene graph: persistent nodes (track IDs from SAM), confidence decay once a node exits FoV, edges computed geometrically (left-of/right-of/behind/distance/closing-speed).
 4. **Hazard loop (new):** Glimmer runs continuously over the graph, computing/consuming TTC per tracked object relative to the user's trajectory; crosses a threshold → emits a hazard event → TTS speaks a warning. This loop runs independent of any user query.
 5. Separately, Wonder answers free-form queries against the graph for the benchmark eval (§4) and any demo Q&A.
 
 ## 7. Demo
 
-Split-screen recording: raw AEA/phone frame on the left; SAM 3.1 masks + the live scene graph + the running audio/TTS transcript on the right. This keeps the demo deterministic (no live camera risk) while still showing the full pipeline end-to-end, including a staged hazard event and its spoken warning.
+Split-screen recording: raw frame on the left; SAM 3.1 masks + the live scene graph + the running audio/TTS transcript on the right. Lead with a SANPO (outdoor) sequence — a real closing vehicle with a genuine few-second TTC is the actual hazard story; an AEA (indoor) clip follows as the cross-dataset generalization beat, not the headline. This keeps the demo deterministic (no live camera risk) while still showing the full pipeline end-to-end, including a real hazard event and its spoken warning.
 
 ## 8. Hardware: DGX Spark (GB10)
 

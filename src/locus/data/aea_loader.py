@@ -15,11 +15,18 @@ free, and what it doesn't:
   what makes an AEA frame's Pose/Intrinsics compatible with
   geometry.frames/lifting without changing either of them.
 - Depth: AEA ships a semi-dense SLAM point cloud (mps_slam_points.zip),
-  not a dense per-pixel depth map. Projecting it into a sparse depth
-  image per frame is real future work, not done here -- Frame.depth is
-  None for every AEA frame right now. That means lift()/lift_from_box()
-  can't run on real AEA frames yet; this loader gets pose+RGB+intrinsics
-  right first rather than quietly fabricating depth.
+  not a dense per-pixel depth map. `load_point_cloud` + `project_sparse_depth`
+  turn it into a per-frame sparse depth image: the static world-frame point
+  cloud is projected into each frame's camera via its real pose, keeping
+  the nearest point per pixel (a z-buffer, same occlusion handling as
+  locus.data.synthetic's farthest-first painting). This is naturally sparse
+  (a few thousand valid pixels out of ~300K, not a dense map) -- which is
+  exactly the shape lift()/lift_from_box() were written for already (they
+  already gate on a minimum count of valid depth pixels in a region).
+  The point cloud's own observations (semidense_observations.csv.gz) are
+  recorded against the SLAM cameras, not the RGB camera, so they can't be
+  used to occlusion-test against the RGB view directly; the per-pixel
+  z-buffer is the practical substitute.
 
 Calibration notes (verified against an actual frame, not assumed): the
 camera-rgb calibration in online_calibration.jsonl is parameterized at a
@@ -54,6 +61,51 @@ NATIVE_RGB_RESOLUTION = 2880  # Aria Gen1 RGB sensor; see module docstring
 def load_manifest(manifest_path: str | Path) -> dict:
     with open(manifest_path) as f:
         return json.load(f)["sequences"]
+
+
+def load_point_cloud(
+    sequence_id: str, config: dict | None = None, max_dist_std: float = 0.15
+) -> np.ndarray:
+    """World-frame (px, py, pz) for every semi-dense SLAM point passing a
+    distance-uncertainty gate. `max_dist_std` follows MPS's own documented
+    filtering convention (points with poorly-constrained distance aren't
+    useful depth samples)."""
+    from projectaria_tools.core import mps
+
+    config = config or load_config(DEFAULT_CONFIG_PATH)
+    dataset_dir = Path(config["paths"]["dataset_dir"])
+    manifest = load_manifest(config["paths"]["dataset_manifest"])
+
+    points_zip = _manifest_file_path(dataset_dir, sequence_id, manifest, "mps_slam_points")
+    points_csv = _ensure_extracted(points_zip, "semidense_points.csv.gz")
+    points = mps.read_global_point_cloud(str(points_csv))
+
+    positions = np.array([p.position_world for p in points if p.distance_std <= max_dist_std])
+    return positions
+
+
+def project_sparse_depth(
+    intrinsics: Intrinsics, pose: Pose, points_world: np.ndarray, max_range_m: float = 15.0
+) -> np.ndarray:
+    """Projects a static world-frame point cloud into one camera pose,
+    keeping the nearest point per pixel (a z-buffer -- the vectorized
+    equivalent of locus.data.synthetic's farthest-first painting)."""
+    p_cam = (pose.R_world_cam.T @ (points_world - pose.t_world_cam).T).T
+    depth_vals = p_cam[:, 2]
+    in_front = (depth_vals > 0) & (depth_vals <= max_range_m)
+    p_cam, depth_vals = p_cam[in_front], depth_vals[in_front]
+
+    u = intrinsics.fx * p_cam[:, 0] / depth_vals + intrinsics.cx
+    v = intrinsics.fy * p_cam[:, 1] / depth_vals + intrinsics.cy
+    in_bounds = (u >= 0) & (u < intrinsics.width) & (v >= 0) & (v < intrinsics.height)
+    u, v, depth_vals = u[in_bounds], v[in_bounds], depth_vals[in_bounds]
+
+    depth = np.zeros((intrinsics.height, intrinsics.width), dtype=float)
+    order = np.argsort(-depth_vals)  # farthest first, so the nearest overwrites last
+    u_px = u[order].astype(int)
+    v_px = v[order].astype(int)
+    depth[v_px, u_px] = depth_vals[order]
+    return depth
 
 
 def _manifest_file_path(dataset_dir: Path, sequence_id: str, manifest: dict, key: str) -> Path:
@@ -142,13 +194,26 @@ class AeaSequence:
         idx = min(max(idx, 0), len(self._poses) - 1)
         return self._poses[idx]
 
-    def iter_frames(self, stride: int = 1, max_frames: int | None = None) -> Iterator[Frame]:
-        """Yields undistorted-RGB, real-pose, depth=None Frames in order."""
+    def iter_frames(
+        self,
+        stride: int = 1,
+        max_frames: int | None = None,
+        point_cloud_world: np.ndarray | None = None,
+        depth_max_range_m: float = 15.0,
+        start_frame: int = 0,
+    ) -> Iterator[Frame]:
+        """Yields undistorted-RGB, real-pose Frames in order, starting at
+        `start_frame` (e.g. to reach a window with real wearer motion rather
+        than always the clip's opening seconds). Frame.depth is None unless
+        `point_cloud_world` (from `load_point_cloud`) is given, in which case
+        it's the sparse point-cloud projection for that pose."""
         from projectaria_tools.core import calibration as aria_calibration
 
         cap = cv2.VideoCapture(str(self.video_path))
         try:
-            frame_index = 0
+            if start_frame > 0:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            frame_index = start_frame
             yielded = 0
             while True:
                 ok, bgr = cap.read()
@@ -168,7 +233,12 @@ class AeaSequence:
                         R_world_cam=T_world_camera[:3, :3],
                         t_world_cam=T_world_camera[:3, 3],
                     )
-                    yield Frame(timestamp=t, rgb=undistorted, depth=None, pose=pose)
+                    depth = None
+                    if point_cloud_world is not None:
+                        depth = project_sparse_depth(
+                            self.intrinsics, pose, point_cloud_world, max_range_m=depth_max_range_m
+                        )
+                    yield Frame(timestamp=t, rgb=undistorted, depth=depth, pose=pose)
                     yielded += 1
                     if max_frames is not None and yielded >= max_frames:
                         return

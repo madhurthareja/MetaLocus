@@ -126,6 +126,46 @@ def test_node_evicted_after_timeout_not_before():
     assert node_id not in graph.nodes, "not evicted after the configured timeout"
 
 
+def test_duplicate_instance_ids_merge_once_they_converge_spatially():
+    """Confirmed happening for real: SAM 3.1's multiplex tracker can emit
+    two different instance_ids for one physical object before its own
+    de-duplication converges (seen on a real AEA clip -- two overlapping
+    chair masks, 0.29m apart after lifting, that never merged because the
+    association gate is only checked at node-creation time). Here the two
+    instances start > the 1.0m gate apart (so they're forced into separate
+    nodes) and then converge to within it on a later observation."""
+    graph = SpatialMemoryGraph(association_gate_m=1.0)
+    inst_a = Instance3D(
+        concept="chair", instance_id=100, p_cam=np.zeros(3),
+        p_world=np.array([0.0, 0.0, 5.0]), extent=np.zeros(3), score=1.0,
+    )
+    inst_b = Instance3D(
+        concept="chair", instance_id=200, p_cam=np.zeros(3),
+        p_world=np.array([0.0, 0.0, 6.5]), extent=np.zeros(3), score=1.0,
+    )
+    graph.observe([inst_a, inst_b], None, t=0.0)
+    assert len(graph.nodes) == 2, "should start as two separate nodes -- the gate miss is the whole setup"
+
+    inst_a2 = Instance3D(
+        concept="chair", instance_id=100, p_cam=np.zeros(3),
+        p_world=np.array([0.0, 0.0, 5.0]), extent=np.zeros(3), score=1.0,
+    )
+    inst_b2 = Instance3D(
+        concept="chair", instance_id=200, p_cam=np.zeros(3),
+        p_world=np.array([0.0, 0.0, 5.2]), extent=np.zeros(3), score=1.0,
+    )
+    graph.observe([inst_a2, inst_b2], None, t=1.0)
+
+    assert len(graph.nodes) == 1, "nodes within the gate after a later observation should merge"
+    merged_node = next(iter(graph.nodes.values()))
+    assert merged_node.observation_count == 4, "merged node should carry both tracks' observation history"
+
+    # Both original instance_ids must now resolve to the single surviving node
+    # (otherwise the next observation of either would spuriously recreate a node).
+    node_ids = {graph._instance_to_node[100], graph._instance_to_node[200]}
+    assert node_ids == {merged_node.node_id}
+
+
 def test_reentry_binds_to_same_node_id():
     global _OBJECT_ID_TO_INT
     _OBJECT_ID_TO_INT = {}

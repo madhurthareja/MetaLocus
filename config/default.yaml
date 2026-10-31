@@ -25,13 +25,16 @@ image:
   height: 480
 
 tts:
-  backend: null   
+  backend: seamless_m4t_v2
+  model_id: facebook/seamless-m4t-v2-large
+  lang: eng
 
 paths:
   dataset_dir: /home/iairo-dgx1/vision_datasets/hackathon/aea
   dataset_manifest: /home/iairo-dgx1/vision_datasets/hackathon/aea/selected_sequences.json
   sam3_repo: /home/iairo-dgx1/vision_datasets/hackathon/repos/sam3
-  sam31_checkpoint_hf_repo: facebook/sam3.1   
+  sam31_checkpoint_hf_repo: facebook/sam3.1
+  sanpo_cache_dir: /home/iairo-dgx1/vision_datasets/hackathon/sanpo_cache
 
 aea_sequences:
   - loc5_script4_seq6_rec1
@@ -42,3 +45,10 @@ aea_sequences:
   - loc3_script5_seq3_rec1
   - loc3_script4_seq7_rec1
   - loc3_script3_seq1_rec1
+
+# Verified by hand: ego_motion WALKING, moderate traffic, medium obstacles,
+# sunny/high visibility, 539 frames @ 15fps. Dense depth (~96% valid pixels),
+# vs. AEA's ~18% from semi-dense point-cloud projection -- this is why SANPO
+# was added alongside AEA, not instead of it.
+sanpo_sequences:
+  - "-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG"
