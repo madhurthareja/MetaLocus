@@ -116,7 +116,7 @@ a { color: var(--blue); }
   padding: 5px 10px; border-radius: 999px; background: var(--surface);
   font-size: 12px; color: var(--text-secondary); border: 1px solid var(--border);
 }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-secondary); flex-shrink: 0; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-secondary); flex-shrink: 0; transition: background-color 0.3s ease, box-shadow 0.3s ease; }
 .dot.ok { background: var(--safe); box-shadow: 0 0 0 3px var(--safe-bg); }
 .dot.warn { background: var(--hazard); box-shadow: 0 0 0 3px var(--hazard-bg); }
 .dot.off { background: #B6BEC4; }
@@ -165,10 +165,12 @@ select.hdr-select {
   padding: 9px 10px; border-radius: var(--radius-sm);
   color: var(--text-secondary); font-size: 13.5px; font-weight: 500;
   cursor: pointer; border: none; background: none; width: 100%; text-align: left;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: inset 3px 0 0 transparent;
 }
 .nav-item:hover { background: var(--surface); color: var(--ink); }
-.nav-item.active { background: var(--info-bg); color: var(--blue); }
+.nav-item.active { background: var(--info-bg); color: var(--blue); box-shadow: inset 3px 0 0 var(--blue); }
+.nav-item:active { transform: scale(0.98); }
 .nav-item svg { width: 17px; height: 17px; flex-shrink: 0; }
 
 .sidebar-spacer { flex: 1; }
@@ -185,7 +187,8 @@ select.hdr-select {
 /* Main --------------------------------------------------------------------*/
 .app-main { grid-area: main; overflow-y: auto; padding: var(--space-4); min-width: 0; }
 .page { display: none; max-width: 1540px; margin: 0 auto; }
-.page.active { display: block; }
+.page.active { display: block; animation: page-in 0.25s ease; }
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
 /* -------------------------------------------------------------------- */
 /* Generic building blocks                                              */
@@ -208,7 +211,15 @@ select.hdr-select {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.03em;
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
+/* Pulse is purely an "actively playing" cue -- paused/idle means frame-
+   accurate and frozen, so these only animate while html.is-playing is set
+   (see main.js's 'playback-changed' listener). Otherwise a paused critical
+   hazard would keep visibly pulsing, which reads as "still playing". */
+.badge.critical { animation: badge-pulse 1.6s ease-in-out infinite; animation-play-state: paused; }
+html.is-playing .badge.critical { animation-play-state: running; }
+@keyframes badge-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(217, 72, 72, 0.35); } 50% { box-shadow: 0 0 0 4px rgba(217, 72, 72, 0); } }
 .badge.safe { background: var(--safe-bg); color: var(--safe); }
 .badge.hazard { background: var(--hazard-bg); color: var(--hazard); }
 .badge.critical { background: var(--critical-bg); color: var(--critical); }
@@ -220,9 +231,10 @@ select.hdr-select {
   display: inline-flex; align-items: center; gap: 6px;
   border: 1px solid var(--border); background: var(--bg); color: var(--ink);
   border-radius: var(--radius-sm); padding: 7px 13px; font-size: 12.5px; font-weight: 500;
-  cursor: pointer; transition: background 0.12s ease, border-color 0.12s ease;
+  cursor: pointer; transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, transform 0.08s ease;
 }
 .btn:hover { background: var(--surface); }
+.btn:active { transform: scale(0.96); }
 .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
 .btn.primary:hover { background: #0656d6; }
 .btn.active { background: var(--info-bg); border-color: var(--blue); color: var(--blue); }
@@ -235,9 +247,20 @@ select.hdr-select {
   display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; border-radius: var(--radius-sm); border: 1px solid var(--border);
   background: var(--bg); color: var(--text-secondary); cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.08s ease;
 }
 .icon-btn:hover { background: var(--surface); color: var(--ink); }
+.icon-btn:active { transform: scale(0.92); }
 .icon-btn svg { width: 15px; height: 15px; }
+
+.btn:focus-visible, .icon-btn:focus-visible, .nav-item:focus-visible,
+select:focus-visible, input[type=range]:focus-visible, .cf-chip:focus-visible {
+  outline: 2px solid var(--blue); outline-offset: 2px;
+}
+table.data-table tbody tr:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.9s linear infinite; }
 
 /* Data integrity labeling -- required throughout per UI.md section 12 */
 .data-tag {
@@ -352,20 +375,27 @@ select.hdr-select {
   background: rgba(0,0,0,0.6); padding: 1px 6px; border-radius: 4px; transform: translate(-50%, -140%);
   pointer-events: none; white-space: nowrap;
 }
-.cf-chip { pointer-events: auto; cursor: pointer; }
+.cf-chip { pointer-events: auto; cursor: pointer; transition: background-color 0.15s ease, transform 0.1s ease; }
+.cf-chip:hover { background: rgba(8, 102, 255, 0.55); transform: scale(1.04); }
 .cf-chip.active { background: var(--blue); }
 
 /* -------------------------------------------------------------------- */
 /* Hazard panel                                                         */
 /* -------------------------------------------------------------------- */
+.hazard-card .card-body { transition: background-color 0.4s ease; }
 .hazard-card.state-safe .card-body { background: var(--safe-bg); }
+.hazard-card.state-advisory .card-body { background: var(--info-bg); }
 .hazard-card.state-hazard .card-body { background: var(--hazard-bg); }
 .hazard-card.state-critical .card-body { background: var(--critical-bg); }
 .hazard-headline { display: flex; align-items: center; gap: 10px; }
-.hazard-headline .glyph { width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.hazard-headline .glyph { width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: background-color 0.4s ease; }
 .state-safe .glyph { background: var(--safe); }
+.state-advisory .glyph { background: var(--blue); }
 .state-hazard .glyph { background: var(--hazard); }
 .state-critical .glyph { background: var(--critical); }
+.state-critical .glyph { animation: glyph-pulse 1.4s ease-in-out infinite; animation-play-state: paused; }
+html.is-playing .state-critical .glyph { animation-play-state: running; }
+@keyframes glyph-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(217, 72, 72, 0.45); } 50% { box-shadow: 0 0 0 6px rgba(217, 72, 72, 0); } }
 .glyph svg { width: 18px; height: 18px; color: #fff; }
 .hazard-title { font-size: 16px; font-weight: 700; color: var(--ink); }
 .hazard-subtitle { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
@@ -410,12 +440,18 @@ select.hdr-select {
 .timeline-progress { position: absolute; top: 15px; left: 0; height: 4px; background: var(--blue); border-radius: 2px; }
 .timeline-event-marker {
   position: absolute; top: 6px; width: 3px; height: 14px; border-radius: 1.5px; cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease; transform-origin: bottom center;
 }
+.timeline-event-marker:hover { transform: scaleY(1.3) scaleX(1.6); }
 .timeline-event-marker.detection { background: #9FB4BD; }
 .timeline-event-marker.leave_frame { background: #B6BEC4; }
 .timeline-event-marker.reassociated { background: var(--blue); }
 .timeline-event-marker.hazard { background: var(--hazard); height: 18px; top: 4px; }
 .timeline-event-marker.critical { background: var(--critical); height: 20px; top: 3px; }
+
+.timeline-scrub input[type=range]::-webkit-slider-thumb { transition: transform 0.1s ease; }
+.timeline-scrub input[type=range]:hover::-webkit-slider-thumb,
+.timeline-scrub input[type=range]:active::-webkit-slider-thumb { transform: scale(1.25); }
 .timeline-legend-row { display: flex; gap: var(--space-4); margin-top: 8px; flex-wrap: wrap; }
 .timeline-legend-row .legend-row { color: var(--text-secondary); }
 .timeline-legend-row .legend-swatch { background: var(--text-secondary); }
@@ -423,11 +459,12 @@ select.hdr-select {
 /* -------------------------------------------------------------------- */
 /* Perception pipeline strip                                            */
 /* -------------------------------------------------------------------- */
-.pipeline-strip { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0; }
+.pipeline-strip { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0; min-width: 0; }
 .pipeline-stage {
   display: flex; flex-direction: column; gap: 6px; padding: var(--space-3) var(--space-3);
-  border-right: 1px solid var(--border); cursor: pointer; position: relative;
+  border-right: 1px solid var(--border); cursor: pointer; position: relative; min-width: 0;
 }
+.pipeline-stage .stage-desc { overflow-wrap: break-word; }
 .pipeline-stage:last-child { border-right: none; }
 .pipeline-stage:hover { background: var(--surface); }
 .pipeline-stage .stage-top { display: flex; align-items: center; justify-content: space-between; }
@@ -450,7 +487,10 @@ table.data-table th {
 }
 table.data-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--ink); }
 table.data-table tr:last-child td { border-bottom: none; }
+table.data-table tbody tr { transition: background-color 0.1s ease; }
 table.data-table tbody tr:hover { background: var(--surface); cursor: pointer; }
+table.data-table tbody tr.selected { background: var(--info-bg); }
+table.data-table tbody tr.selected td { color: var(--ink); }
 .filter-row { display: flex; gap: 8px; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .filter-row select { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 9px; font-size: 12px; background: var(--bg); color: var(--ink); }
 
@@ -499,6 +539,34 @@ table.data-table tbody tr:hover { background: var(--surface); cursor: pointer; }
 .kv-row .k { color: var(--text-secondary); }
 .kv-row .v { font-family: var(--font-mono); color: var(--ink); font-weight: 500; text-align: right; }
 
+/* Stat tiles / meters -- replace label:value text rows with something that
+   reads at a glance. A plain number becomes a tile; a ratio against a limit
+   becomes a meter; only genuinely non-numeric facts stay as text. */
+.stat-tile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.stat-tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 11px; }
+.stat-tile .stv { font-family: var(--font-mono); font-size: 17px; font-weight: 700; color: var(--ink); letter-spacing: -0.01em; line-height: 1.2; }
+.stat-tile .stl { font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 3px; }
+
+.meter-row + .meter-row { margin-top: 10px; }
+.meter-row .meter-label { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-secondary); margin-bottom: 4px; }
+.meter-row .meter-label .mv { font-family: var(--font-mono); font-weight: 600; color: var(--ink); }
+.meter-track { height: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.meter-fill { height: 100%; background: var(--blue); border-radius: 4px; transition: width 0.4s ease; }
+
+/* Click-for-detail: a compact default, full explanation only on demand --
+   the same disclosure the pipeline strip popover already uses. */
+.detail-trigger { font-size: 11px; color: var(--blue); font-weight: 600; cursor: pointer; background: none; border: none; padding: 0; margin-top: 4px; display: inline-flex; align-items: center; gap: 3px; }
+.detail-trigger:hover { text-decoration: underline; }
+
+.disclosure-toggle {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--blue);
+  cursor: pointer; background: none; border: none; padding: 6px 0; font-weight: 600;
+}
+.disclosure-toggle svg { width: 14px; height: 14px; transition: transform 0.2s ease; }
+.disclosure-toggle.open svg { transform: rotate(180deg); }
+.disclosure-body { overflow: hidden; max-height: 0; transition: max-height 0.3s ease; }
+.disclosure-body.open { max-height: 2000px; }
+
 .notice-box {
   display: flex; gap: 10px; align-items: flex-start; padding: var(--space-3);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
@@ -537,3 +605,19 @@ table.data-table tbody tr:hover { background: var(--surface); cursor: pointer; }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: #D4DADF; border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: #D4DADF transparent; }
+
+/* -------------------------------------------------------------------- */
+/* Popover -- replaces native alert() for click-for-detail affordances  */
+/* -------------------------------------------------------------------- */
+.popover {
+  position: fixed; z-index: 200; max-width: 300px;
+  background: var(--ink); color: #fff; border-radius: var(--radius-md);
+  padding: var(--space-3); font-size: 12px; line-height: 1.6;
+  box-shadow: var(--shadow-md); animation: popover-in 0.14s ease;
+}
+.popover .pv-title { font-size: 12.5px; font-weight: 700; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.popover .pv-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; color: #C7D4DC; }
+.popover .pv-row .k { color: #8A99A3; }
+.popover .pv-warn { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.12); color: #FFC178; }
+@keyframes popover-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }

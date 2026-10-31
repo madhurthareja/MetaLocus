@@ -1,0 +1,47 @@
+{
+  "hardware": "NVIDIA GB10",
+  "torch_version": "2.10.0+cu128",
+  "n_frames_per_run": 24,
+  "dataset": "sanpo",
+  "session_id": "-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG",
+  "results": [
+    {
+      "n_concepts": 1,
+      "concepts": [
+        "pole"
+      ],
+      "n_frames": 24,
+      "elapsed_s": 35.34,
+      "fps_aggregate": 0.679,
+      "seconds_per_concept_session": 35.338
+    },
+    {
+      "n_concepts": 3,
+      "concepts": [
+        "pole",
+        "van",
+        "tree"
+      ],
+      "n_frames": 24,
+      "elapsed_s": 77.08,
+      "fps_aggregate": 0.311,
+      "seconds_per_concept_session": 25.694
+    },
+    {
+      "n_concepts": 6,
+      "concepts": [
+        "pole",
+        "van",
+        "tree",
+        "fire hydrant",
+        "trash bin",
+        "truck"
+      ],
+      "n_frames": 24,
+      "elapsed_s": 144.42,
+      "fps_aggregate": 0.166,
+      "seconds_per_concept_session": 24.07
+    }
+  ],
+  "note": "prepare() runs one full session per concept, strictly sequentially (no concurrent/multiplexed execution across concepts in this integration) -- elapsed scales with concept count because of that loop, not GPU contention. These are forward+reverse propagation wall-clock numbers on a small real frame window, not a production per-frame latency SLA."
+}

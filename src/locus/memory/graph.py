@@ -109,6 +109,12 @@ class SpatialMemoryGraph:
                     dist = float(np.linalg.norm(self.nodes[id_a].p_world - self.nodes[id_b].p_world))
                     if dist < self.association_gate_m:
                         self._merge_into(id_a, id_b)
+                        if id_a not in self.nodes:
+                            # _merge_into kept id_b (it was observed more
+                            # recently) and dropped id_a instead -- id_a is
+                            # gone, so stop comparing against it.
+                            merged.add(id_a)
+                            break
                         merged.add(id_b)
 
     def _merge_into(self, keep: int, drop: int) -> None:

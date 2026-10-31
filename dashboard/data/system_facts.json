@@ -19,7 +19,54 @@
       "status": "real",
       "version": "sam3.1",
       "detail": "One video session per concept (native API constraint, not a design choice -- no multi-concept single pass). use_fa3=False.",
-      "known_limitation": "scripts/smoke_test_sam31.py (per-session throughput with 4-6 concurrent concept sessions) is not yet filled in."
+      "known_limitation": "Measured on NVIDIA GB10 with scripts/smoke_test_sam31.py (24 real SANPO frames per run, since prepare() runs sessions strictly sequentially, one per concept, not concurrently): ~35s for 1 concept-session, ~24s/session at 6 concepts (144s total) -- scales with concept count as expected from the sequential-session constraint above, not a concurrency bottleneck. This is a small-window benchmark, not an instrumented production per-frame latency.",
+      "benchmark": {
+        "hardware": "NVIDIA GB10",
+        "torch_version": "2.10.0+cu128",
+        "n_frames_per_run": 24,
+        "dataset": "sanpo",
+        "session_id": "-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG",
+        "results": [
+          {
+            "n_concepts": 1,
+            "concepts": [
+              "pole"
+            ],
+            "n_frames": 24,
+            "elapsed_s": 35.34,
+            "fps_aggregate": 0.679,
+            "seconds_per_concept_session": 35.338
+          },
+          {
+            "n_concepts": 3,
+            "concepts": [
+              "pole",
+              "van",
+              "tree"
+            ],
+            "n_frames": 24,
+            "elapsed_s": 77.08,
+            "fps_aggregate": 0.311,
+            "seconds_per_concept_session": 25.694
+          },
+          {
+            "n_concepts": 6,
+            "concepts": [
+              "pole",
+              "van",
+              "tree",
+              "fire hydrant",
+              "trash bin",
+              "truck"
+            ],
+            "n_frames": 24,
+            "elapsed_s": 144.42,
+            "fps_aggregate": 0.166,
+            "seconds_per_concept_session": 24.07
+          }
+        ],
+        "note": "prepare() runs one full session per concept, strictly sequentially (no concurrent/multiplexed execution across concepts in this integration) -- elapsed scales with concept count because of that loop, not GPU contention. These are forward+reverse propagation wall-clock numbers on a small real frame window, not a production per-frame latency SLA."
+      }
     },
     {
       "id": "lifting",
@@ -91,25 +138,24 @@
     "fps": 15.0,
     "n_frames": 539,
     "concepts": [
-      "scaffold pole",
+      "pole",
       "van",
       "tree",
       "fire hydrant",
       "trash bin",
-      "ladder"
+      "truck"
     ],
-    "total_detections": 1694,
-    "total_lifted": 1664,
+    "total_detections": 3521,
+    "total_lifted": 3491,
     "edge_radius_m": 20.0,
     "final_graph_summary": {
-      "n_nodes": 16,
+      "n_nodes": 25,
       "concepts_live": [
         "tree",
+        "truck",
         "van"
       ],
-      "concepts_decaying": [
-        "ladder"
-      ]
+      "concepts_decaying": []
     }
   },
   "latency_disclaimer": "No per-stage wall-clock instrumentation exists in the production pipeline (scripts/generate_dashboard_data.py, scripts/run_real_sequence.py). Any latency figure shown for the real pipeline stages (Spark/SAM 3.1/TTS) would be fabricated -- the System page must mark per-stage latency as 'not measured' rather than show a number. The only real timing data in this repo is the synthetic eval harness's relative per-condition wall-clock comparison in dashboard/data/ablation_results.json, which explicitly is not a deployed-system latency benchmark."

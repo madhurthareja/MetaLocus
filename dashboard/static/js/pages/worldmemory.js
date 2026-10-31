@@ -1,7 +1,7 @@
 import { state, on, currentFrame } from '../state.js';
 import { icon, refreshIcons } from '../icons.js';
 import { WorldViewPanel } from '../worldpanel.js';
-import { ObjectInspector } from '../components.js';
+import { ObjectInspector, showPopover } from '../components.js';
 
 export function renderShell(container) {
   container.innerHTML = `
@@ -52,10 +52,17 @@ function renderOpsExplainer(el) {
     { icon: 'move-3d', name: 'Spatial re-association', desc: 'A new detection within 1.0m of an existing same-concept node is merged into it, not created as a new track.' },
     { icon: 'git-merge', name: 'Duplicate-track merging', desc: "Re-checked after every observation (not just at creation) -- fixed a real bug where SAM 3.1's tracker emitted two instance IDs for one physical object." },
   ];
-  el.innerHTML = ops.map((o) => `<div style="display:flex; gap:10px; margin-bottom:14px;">
-    <div style="color:var(--blue); flex-shrink:0;">${icon(o.icon)}</div>
-    <div><div style="font-weight:600; font-size:12.5px; color:var(--ink);">${o.name}</div><div style="font-size:11.5px; color:var(--text-secondary); line-height:1.5;">${o.desc}</div></div>
-  </div>`).join('');
+  el.innerHTML = `<div class="stat-tile-grid" style="grid-template-columns:repeat(2,1fr);">${ops.map((o, i) => `
+    <button class="stat-tile" data-i="${i}" style="text-align:left; cursor:pointer; display:flex; gap:8px; align-items:flex-start; border:1px solid var(--border); font-family:inherit;">
+      <div style="color:var(--blue); flex-shrink:0; margin-top:1px;">${icon(o.icon)}</div>
+      <div style="font-weight:600; font-size:12px; color:var(--ink);">${o.name}</div>
+    </button>`).join('')}</div>`;
+  el.querySelectorAll('.stat-tile').forEach((btn) => {
+    const o = ops[Number(btn.dataset.i)];
+    btn.addEventListener('click', (e) => {
+      showPopover(e.currentTarget, `<div class="pv-title">${icon(o.icon)}${o.name}</div><div style="margin-top:4px;">${o.desc}</div>`, `op-${o.name}`);
+    });
+  });
   refreshIcons();
 }
 

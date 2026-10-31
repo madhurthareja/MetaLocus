@@ -171,23 +171,43 @@ export class WorldView {
   }
 
   setViewMode(mode) {
+    // Top <-> side is a position/up change on the SAME (ortho) camera, so it
+    // tweens smoothly. 3D <-> ortho swaps the camera object itself (different
+    // projection, no sane way to interpolate) -- that transition gets a very
+    // short opacity dip instead, so the cut reads as a deliberate mode change
+    // rather than a jarring frame-to-frame jump.
+    const crossingProjection = (this.mode === '3d') !== (mode === '3d');
     this.mode = mode;
-    if (mode === '3d') {
-      this.camera = this.perspCamera;
-      this.controls.object = this.camera;
-      this.controls.enableRotate = true;
-    } else {
+
+    const applyMode = () => {
+      if (mode === '3d') {
+        this.camera = this.perspCamera;
+        this.controls.object = this.camera;
+        this.controls.enableRotate = true;
+        this.controls.update();
+        return;
+      }
       this.camera = this.orthoCamera;
       this.controls.object = this.camera;
       this.controls.enableRotate = false;
-      if (mode === 'top') {
-        this.orthoCamera.position.set(0, 30, 0.01);
-        this.orthoCamera.up.set(0, 0, -1);
+      const targetPos = mode === 'top' ? new THREE.Vector3(0, 30, 0.01) : new THREE.Vector3(30, 1.5, 0);
+      const targetUp = mode === 'top' ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0);
+      if (crossingProjection) {
+        this.orthoCamera.position.copy(targetPos);
+        this.orthoCamera.up.copy(targetUp);
+        this.controls.update();
       } else {
-        this.orthoCamera.position.set(30, 1.5, 0);
-        this.orthoCamera.up.set(0, 1, 0);
+        this._camTween = { cam: this.orthoCamera, startPos: this.orthoCamera.position.clone(), startUp: this.orthoCamera.up.clone(), targetPos, targetUp, t0: performance.now(), duration: 420 };
       }
-      this.controls.update();
+    };
+
+    if (crossingProjection) {
+      const dom = this.renderer.domElement;
+      dom.style.transition = 'opacity 0.15s ease';
+      dom.style.opacity = '0';
+      setTimeout(() => { applyMode(); dom.style.opacity = '1'; }, 160);
+    } else {
+      applyMode();
     }
   }
 
@@ -228,7 +248,13 @@ export class WorldView {
     this.controls.update();
   }
 
-  setSelectedNode(id) { this.selectedNodeId = id; }
+  setSelectedNode(id) {
+    if (id != null && id !== this.selectedNodeId) {
+      const rec = this._nodeMeshes.get(id);
+      if (rec) rec.selectPopT0 = performance.now();
+    }
+    this.selectedNodeId = id;
+  }
   setHoveredNode(id) { this.hoveredNodeId = id; }
   setFilter(filter) {
     this.filter = { ...this.filter, ...filter };
@@ -298,6 +324,12 @@ export class WorldView {
     ring.rotation.x = -Math.PI / 2;
     group.add(ring);
 
+    // Selection feedback -- deliberately a separate mesh from the hazard
+    // ring above so "I clicked this" never reads as "this is a hazard".
+    const selGeom = new THREE.BoxGeometry(1.25, 1.25, 1.25);
+    const selectGlow = new THREE.LineSegments(new THREE.EdgesGeometry(selGeom), new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 }));
+    group.add(selectGlow);
+
     const trajGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
     const traj = new THREE.Line(trajGeom, new THREE.LineDashedMaterial({ color: COLORS.predicted, dashSize: 0.25, gapSize: 0.15, transparent: true, opacity: 0 }));
     group.add(traj);
@@ -315,7 +347,7 @@ export class WorldView {
       border-radius: 4px; white-space: nowrap; pointer-events: none; border: 1px solid rgba(255,255,255,0.08);`;
     this.labelLayer.appendChild(label);
 
-    const rec = { group, box, fill, halo, ring, traj, hitbox, label };
+    const rec = { group, box, fill, halo, ring, selectGlow, traj, hitbox, label, selectPopT0: null };
     this._nodeMeshes.set(nodeId, rec);
     return rec;
   }
@@ -395,9 +427,26 @@ export class WorldView {
       rec.ring.material.opacity = 0;
     }
 
-    if (isSelected || isHovered) {
+    if (isSelected) {
+      let popScale = 1;
+      if (rec.selectPopT0 != null) {
+        const dt = performance.now() - rec.selectPopT0;
+        const dur = 300;
+        if (dt < dur) popScale = 1 + 0.35 * (1 - dt / dur);
+        else rec.selectPopT0 = null;
+      }
+      rec.selectGlow.scale.set(sx * popScale, sy * popScale, sz * popScale);
+      rec.selectGlow.material.opacity = 0.5 + 0.25 * Math.sin(performance.now() / 220);
       rec.box.material.color.setHex(0xffffff);
       rec.box.material.opacity = 1;
+    } else {
+      rec.selectGlow.material.opacity = 0;
+      if (isHovered) {
+        // Brighten toward white rather than snapping fully white, so a
+        // casual hover reads as "lighter touch" than a committed selection.
+        rec.box.material.color.lerp(new THREE.Color(0xffffff), 0.45);
+        rec.box.material.opacity = Math.min(1, opacity + 0.3);
+      }
     }
 
     rec.label.textContent = `#${node.node_id} ${node.concept}`;
@@ -408,6 +457,14 @@ export class WorldView {
 
   _animate() {
     requestAnimationFrame(this._animate);
+    if (this._camTween) {
+      const { cam, startPos, startUp, targetPos, targetUp, t0, duration } = this._camTween;
+      const t = Math.min(1, (performance.now() - t0) / duration);
+      const e = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      cam.position.lerpVectors(startPos, targetPos, e);
+      cam.up.lerpVectors(startUp, targetUp, e);
+      if (t >= 1) this._camTween = null;
+    }
     this.controls.update();
     this._updateLabels();
     this.renderer.render(this.scene, this.camera);

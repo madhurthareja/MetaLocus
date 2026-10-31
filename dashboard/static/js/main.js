@@ -101,6 +101,10 @@ function wireHeader() {
   on('frame-changed', ({ frame }) => {
     if (frame) document.getElementById('hdr-elapsed').textContent = `${frame.t.toFixed(1)}s`;
   });
+  // Pulse-style "alive" animations (hazard glyph/badge, 3D hazard ring) are
+  // gated on this -- paused/idle must mean genuinely frozen, not just the
+  // frame data standing still while decorative animation keeps running.
+  on('playback-changed', ({ playing }) => document.documentElement.classList.toggle('is-playing', playing));
 }
 
 async function boot() {

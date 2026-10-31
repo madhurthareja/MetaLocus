@@ -20,6 +20,9 @@ config = yaml.safe_load((ROOT / "config/default.yaml").read_text())
 sanpo_timeline_path = ROOT / "dashboard/data/sanpo_-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG/timeline.json"
 sanpo_timeline = json.loads(sanpo_timeline_path.read_text()) if sanpo_timeline_path.exists() else None
 
+sam31_smoke_test_path = ROOT / "dashboard/data/sam31_smoke_test.json"
+sam31_smoke_test = json.loads(sam31_smoke_test_path.read_text()) if sam31_smoke_test_path.exists() else None
+
 reproducibility = {
     "experiment_configuration": {
         "perception": config["perception"],
@@ -80,15 +83,37 @@ reproducibility = {
     "evaluation_protocol_pointer": "See dashboard/data/ablation_results.json for the full A/B/C/D protocol and results.",
 }
 
+_sam31_component = {
+    "id": "sam31", "name": "SAM 3.1 Object Multiplex", "status": "real",
+    "version": "sam3.1", "detail": "One video session per concept (native API constraint, not a design choice -- no multi-concept single pass). use_fa3=False.",
+}
+if sam31_smoke_test:
+    _by_n = {r["n_concepts"]: r for r in sam31_smoke_test["results"]}
+    _one, _six = _by_n.get(1), _by_n.get(6)
+    _sam31_component["known_limitation"] = (
+        f"Measured on {sam31_smoke_test['hardware']} with scripts/smoke_test_sam31.py "
+        f"({sam31_smoke_test['n_frames_per_run']} real SANPO frames per run, since prepare() "
+        f"runs sessions strictly sequentially, one per concept, not concurrently): "
+        + (f"~{_one['seconds_per_concept_session']:.0f}s for 1 concept-session, "
+           f"~{_six['seconds_per_concept_session']:.0f}s/session at 6 concepts "
+           f"({_six['elapsed_s']:.0f}s total) -- scales with concept count as expected from "
+           f"the sequential-session constraint above, not a concurrency bottleneck. "
+           if _one and _six else "")
+        + "This is a small-window benchmark, not an instrumented production per-frame latency."
+    )
+    _sam31_component["benchmark"] = sam31_smoke_test
+else:
+    _sam31_component["known_limitation"] = (
+        "scripts/smoke_test_sam31.py (per-session throughput with 4-6 concurrent concept sessions) is not yet filled in."
+    )
+
 system_facts = {
     "pipeline_components": [
         {"id": "camera", "name": "Camera input", "status": "real",
          "detail": "SANPO (primary, dense depth) or AEA (secondary, sparse depth) recorded sequences, replayed frame-by-frame -- not a live feed. See PROJECT_PLAN.md's demo section for why replay was chosen over live camera."},
         {"id": "spark", "name": "Muse Spark / Meta Model API", "status": "real",
          "model_id": "muse-spark-1.3", "detail": "Proposes which object concepts to track from the first frame of a sequence. OpenAI-SDK-compatible client against api.meta.ai/v1."},
-        {"id": "sam31", "name": "SAM 3.1 Object Multiplex", "status": "real",
-         "version": "sam3.1", "detail": "One video session per concept (native API constraint, not a design choice -- no multi-concept single pass). use_fa3=False.",
-         "known_limitation": "scripts/smoke_test_sam31.py (per-session throughput with 4-6 concurrent concept sessions) is not yet filled in."},
+        _sam31_component,
         {"id": "lifting", "name": "Median-depth mask lifting", "status": "real",
          "detail": "lift() takes the median depth under a segmentation mask; lift_from_box() (condition C only) takes the median depth under the detection's bounding box instead."},
         {"id": "memory_graph", "name": "Persistent world-memory graph", "status": "real",

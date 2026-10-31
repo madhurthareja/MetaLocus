@@ -59,7 +59,7 @@ class EventTable {
     this.tbody.innerHTML = events.map((e, i) => {
       const node = state.timeline[e.frame]?.nodes.find((n) => n.node_id === e.node_id);
       const outOfView = node && !node.visible ? (state.timeline[e.frame].t - node.last_seen).toFixed(1) + 's' : 'in frame';
-      return `<tr data-i="${i}">
+      return `<tr data-i="${i}" tabindex="0" class="${this.selected === i ? 'selected' : ''}">
         <td class="mono">EVT-${String(i + 1).padStart(3, '0')}</td>
         <td class="mono">${e.t.toFixed(1)}s</td>
         <td>#${e.node_id} ${e.concept}</td>
@@ -69,8 +69,10 @@ class EventTable {
       </tr>`;
     }).join('') || `<tr><td colspan="6"><div class="inspector-empty">no hazard-grade events in this session</div></td></tr>`;
     this.tbody.querySelectorAll('tr[data-i]').forEach((row) => row.addEventListener('click', () => {
-      const e = this.events[Number(row.dataset.i)];
-      jumpToEvent(e);
+      const i = Number(row.dataset.i);
+      this.selected = i;
+      this.tbody.querySelectorAll('tr[data-i]').forEach((r) => r.classList.toggle('selected', Number(r.dataset.i) === i));
+      jumpToEvent(this.events[i]);
     }));
   }
 }

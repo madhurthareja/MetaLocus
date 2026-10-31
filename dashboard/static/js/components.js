@@ -4,6 +4,38 @@ import { icon, refreshIcons } from './icons.js';
 function fmtS(t) { return `${t.toFixed(1)}s`; }
 function el(html) { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstElementChild; }
 
+// A small positioned popover, replacing native alert()/title tooltips for
+// "click for detail" affordances. Clicking the same anchor again closes it.
+// Exported -- every page uses this same disclosure instead of inventing its
+// own, so "compact by default, full detail on click" reads consistently.
+export function showPopover(anchorEl, html, key) {
+  const existing = document.querySelector('.popover');
+  if (existing) {
+    const toggledOff = existing.dataset.key === key;
+    existing.remove();
+    if (toggledOff) return;
+  }
+  const pop = document.createElement('div');
+  pop.className = 'popover';
+  pop.dataset.key = key;
+  pop.innerHTML = html;
+  document.body.appendChild(pop);
+  refreshIcons();
+  const r = anchorEl.getBoundingClientRect();
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let left = Math.max(8, Math.min(r.left + r.width / 2 - pw / 2, window.innerWidth - pw - 8));
+  let top = r.bottom + 8;
+  if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 8);
+  pop.style.left = `${left}px`;
+  pop.style.top = `${top}px`;
+  function onDocClick(ev) {
+    if (pop.contains(ev.target)) return;
+    pop.remove();
+    document.removeEventListener('mousedown', onDocClick, true);
+  }
+  setTimeout(() => document.addEventListener('mousedown', onDocClick, true), 0);
+}
+
 // =====================================================================
 // Live Camera Feed  (docs/UI.md section 5.B)
 // =====================================================================
@@ -111,8 +143,8 @@ export class HazardPanel {
 
     const edge = mostUrgentEdge(frame.edges);
     const sev = hazardSeverity(edge);
-    card.classList.remove('state-safe', 'state-hazard', 'state-critical');
-    card.classList.add(sev === 'critical' ? 'state-critical' : sev === 'hazard' ? 'state-hazard' : 'state-safe');
+    card.classList.remove('state-safe', 'state-advisory', 'state-hazard', 'state-critical');
+    card.classList.add(sev === 'critical' ? 'state-critical' : sev === 'hazard' ? 'state-hazard' : sev === 'advisory' ? 'state-advisory' : 'state-safe');
 
     if (!edge) {
       this.container.innerHTML = `
@@ -125,32 +157,39 @@ export class HazardPanel {
       return;
     }
 
+    // "advisory" means an edge exists (something is within sensing radius)
+    // but ttc_s is null -- i.e. it is NOT on a closing/collision course. The
+    // real spoken directive reflects that (directives.py only adds urgency
+    // language once ttc_s is a real, closing number), so the dashboard must
+    // not say "APPROACHING" or show an alert glyph for a non-closing object
+    // -- that would be a false alarm this accessibility tool cannot afford.
+    const isClosing = sev === 'hazard' || sev === 'critical';
     const node = nodeById(edge.node_id);
     const hour = clockHour(edge.bearing_deg);
     const side = edge.bearing_deg > 5 ? 'RIGHT' : edge.bearing_deg < -5 ? 'LEFT' : 'AHEAD';
-    const color = sev === 'critical' ? 'var(--critical)' : 'var(--hazard)';
+    const color = sev === 'critical' ? 'var(--critical)' : sev === 'hazard' ? 'var(--hazard)' : 'var(--blue)';
     const visibility = node?.visible ? 'Currently in camera frame' : `Out of camera frame · last observed ${(frame.t - (node?.last_seen ?? frame.t)).toFixed(1)}s ago`;
     const speed = node ? Math.hypot(...node.velocity_world) : 0;
     const motionDesc = speed > 0.15 ? `moving at ~${speed.toFixed(1)} m/s` : 'approximately stationary';
 
     this.container.innerHTML = `
       <div class="hazard-headline">
-        <div class="glyph">${icon(sev === 'critical' ? 'octagon-alert' : 'triangle-alert')}</div>
+        <div class="glyph">${icon(sev === 'critical' ? 'octagon-alert' : isClosing ? 'triangle-alert' : 'eye')}</div>
         <div>
-          <div class="hazard-title">APPROACHING FROM ${side}</div>
+          <div class="hazard-title">${isClosing ? `APPROACHING FROM ${side}` : `TRACKED NEARBY · NOT CLOSING`}</div>
           <div class="hazard-subtitle">${edge.concept} · track #${edge.node_id}</div>
         </div>
         ${compassSvg(edge.bearing_deg, color)}
       </div>
       <div class="hazard-directive-line">"${edge.directive}"</div>
       <ul class="hazard-reason-list">
-        <li><span class="k">Direction of approach</span><span>${hour} o'clock · ${edge.bearing_deg.toFixed(0)}°</span></li>
+        <li><span class="k">${isClosing ? 'Direction of approach' : 'Direction'}</span><span>${hour} o'clock · ${edge.bearing_deg.toFixed(0)}°</span></li>
         <li><span class="k">Current visibility</span><span>${node?.visible ? 'Observed this frame' : 'Retained in memory'}</span></li>
         <li><span class="k">Last observed state</span><span>${visibility}</span></li>
         <li><span class="k">Estimated trajectory</span><span>${motionDesc}</span></li>
         <li><span class="k">Range</span><span>${edge.range_m.toFixed(1)} m</span></li>
         <li><span class="k">Time-to-collision</span><span class="mono">${edge.ttc_s != null ? edge.ttc_s.toFixed(1) + 's' : 'n/a (not closing)'}</span></li>
-        <li><span class="k">Spatial tone</span><span>panned ${side.toLowerCase()}, pulse scales with closing TTC</span></li>
+        <li><span class="k">Spatial tone</span><span>${isClosing ? `panned ${side.toLowerCase()}, pulse scales with closing TTC` : `panned ${side.toLowerCase()}, no urgency pulse (not closing)`}</span></li>
       </ul>`;
     refreshIcons();
   }
@@ -194,13 +233,19 @@ export class HudPreview {
       this.container.querySelector('#hud-tone').textContent = 'tone: silent';
       return;
     }
+    // Same rule as the hazard panel: only an edge with a real, closing
+    // ttc_s earns alarm wording -- an advisory (tracked, not closing) edge
+    // must not render "CAUTION" on the simulated glasses HUD.
+    const isClosing = sev === 'hazard' || sev === 'critical';
     const hour = clockHour(edge.bearing_deg);
-    const label = sev === 'critical' ? 'STOP' : `CAUTION ${edge.bearing_deg > 5 ? 'RIGHT' : edge.bearing_deg < -5 ? 'LEFT' : 'AHEAD'}`;
+    const side = edge.bearing_deg > 5 ? 'RIGHT' : edge.bearing_deg < -5 ? 'LEFT' : 'AHEAD';
+    const label = sev === 'critical' ? 'STOP' : isClosing ? `CAUTION ${side}` : `${edge.concept.toUpperCase()} ${side}`;
     const words = edge.directive.split(' ').slice(0, 6).join(' ');
+    const stateLabel = sev === 'critical' ? '3 · CRITICAL' : sev === 'hazard' ? '2 · APPROACHING' : '1 · TRACKED';
     lens.innerHTML = `
-      <div class="hud-state-label">STATE ${sev === 'critical' ? '3 · CRITICAL' : '2 · APPROACHING'}</div>
+      <div class="hud-state-label">STATE ${stateLabel}</div>
       <div class="hud-arc-wrap">${hudArc(hour, sev)}</div>
-      <div class="hud-directive-text ${sev}">${label}</div>
+      <div class="hud-directive-text ${isClosing ? sev : ''}">${label}</div>
       <div class="hud-sub">${edge.range_m.toFixed(0)}m${edge.ttc_s != null ? ' · ' + edge.ttc_s.toFixed(1) + 's' : ''}</div>`;
     this.container.querySelector('#hud-spoken').textContent = `"${words}"`;
     const pan = edge.bearing_deg > 5 ? 'right' : edge.bearing_deg < -5 ? 'left' : 'center';
@@ -338,7 +383,13 @@ export class PipelineStatus {
     this.container.querySelectorAll('.pipeline-stage').forEach((s) =>
       s.addEventListener('click', () => {
         const c = byId[s.dataset.id];
-        alert(`${c.name}\nStatus: ${c.status}\n${c.model_id ? 'Model: ' + c.model_id + '\n' : ''}${c.detail}${c.known_limitation ? '\n\nKnown limitation: ' + c.known_limitation : ''}`);
+        showPopover(s, `
+          <div class="pv-title">${icon('info')}${c.name}</div>
+          <div class="pv-row"><span class="k">Status</span><span>${c.status}</span></div>
+          ${c.model_id ? `<div class="pv-row"><span class="k">Model</span><span class="mono">${c.model_id}</span></div>` : ''}
+          <div style="margin-top:6px;">${c.detail}</div>
+          ${c.known_limitation ? `<div class="pv-warn">${c.known_limitation}</div>` : ''}
+        `, c.id ?? s.dataset.id);
       })
     );
     refreshIcons();
