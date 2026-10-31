@@ -1,0 +1,422 @@
+{
+  "evaluation_protocol": {
+    "description": "Synthetic ground-truth evaluation. All four conditions are run against the same MockSegmenter-driven detections (ground-truth-driven, not a real vision model) so that persistence behavior, not perception quality, is what's being compared. This isolates the one variable the ablation ladder is designed to test.",
+    "why_synthetic": "Synthetic scenarios are the only data source with exact ground truth for visibility, bearing and range at every frame -- see docs/CLAUDE.md. This is NOT a SANPO/AEA real-world-ground-truth result.",
+    "scenarios": [
+      "straight_walk",
+      "head_turn_away",
+      "head_turn_return",
+      "cluttered_occlusion",
+      "crossing_hazard"
+    ],
+    "n_scenarios": 5,
+    "question_generation": "One question per (frame, object): 'where is <concept> right now', scored against exact ground-truth bearing/range, split by ground-truth visibility (in-view vs out-of-view) at query time.",
+    "denominator_note": "in_view_n_queries / out_of_view_n_queries below are pooled question counts across all 5 scenarios, identical for every condition (same question set asked of every condition)."
+  },
+  "conditions": {
+    "A_stateless": {
+      "label": "A: Stateless baseline",
+      "description": "Zero memory. Forgets every object the instant it is not in the current frame's detections.",
+      "in_view_answer_rate": 1.0,
+      "in_view_n_queries": 450,
+      "out_of_view_answer_rate": 0.0,
+      "out_of_view_n_queries": 255,
+      "out_of_view_mean_bearing_error_hours": null,
+      "mean_wall_clock_s_per_frame": 0.000643,
+      "note_on_latency": "Python-loop wall-clock time per synthetic frame through the condition's observe()+answer() path only -- not a deployed/real-time inference benchmark, no GPU model calls in this path (MockSegmenter is ground-truth-driven, no SAM/Spark/TTS). Useful only as a relative A/B/C/D comparison, not an absolute system latency figure."
+    },
+    "B_window": {
+      "label": "B: Sliding-window baseline",
+      "description": "Keeps the last 1.0s of detections per concept (survives a brief glance away) but forgets for good once the window elapses. No notion that an object is 'still out there'.",
+      "in_view_answer_rate": 1.0,
+      "in_view_n_queries": 450,
+      "out_of_view_answer_rate": 0.2353,
+      "out_of_view_n_queries": 255,
+      "out_of_view_mean_bearing_error_hours": 0.0,
+      "mean_wall_clock_s_per_frame": 0.000642,
+      "note_on_latency": "Python-loop wall-clock time per synthetic frame through the condition's observe()+answer() path only -- not a deployed/real-time inference benchmark, no GPU model calls in this path (MockSegmenter is ground-truth-driven, no SAM/Spark/TTS). Useful only as a relative A/B/C/D comparison, not an absolute system latency figure."
+    },
+    "C_box": {
+      "label": "C: Persistent memory, box-lifted",
+      "description": "Full persistent SpatialMemoryGraph (decay, eviction, spatial re-association) but instances are lifted to 3D from the detection's bounding box, not its segmentation mask.",
+      "in_view_answer_rate": 1.0,
+      "in_view_n_queries": 450,
+      "out_of_view_answer_rate": 1.0,
+      "out_of_view_n_queries": 255,
+      "out_of_view_mean_bearing_error_hours": 0.002,
+      "mean_wall_clock_s_per_frame": 0.000655,
+      "note_on_latency": "Python-loop wall-clock time per synthetic frame through the condition's observe()+answer() path only -- not a deployed/real-time inference benchmark, no GPU model calls in this path (MockSegmenter is ground-truth-driven, no SAM/Spark/TTS). Useful only as a relative A/B/C/D comparison, not an absolute system latency figure."
+    },
+    "D_mask": {
+      "label": "D: Full system (persistent memory, mask-lifted)",
+      "description": "Identical persistent-memory pipeline as C; instances are lifted from the real SAM segmentation mask (median masked depth), not the box. Isolates mask-vs-box lifting noise as the only variable vs. C.",
+      "in_view_answer_rate": 1.0,
+      "in_view_n_queries": 450,
+      "out_of_view_answer_rate": 1.0,
+      "out_of_view_n_queries": 255,
+      "out_of_view_mean_bearing_error_hours": 0.0,
+      "mean_wall_clock_s_per_frame": 0.000654,
+      "note_on_latency": "Python-loop wall-clock time per synthetic frame through the condition's observe()+answer() path only -- not a deployed/real-time inference benchmark, no GPU model calls in this path (MockSegmenter is ground-truth-driven, no SAM/Spark/TTS). Useful only as a relative A/B/C/D comparison, not an absolute system latency figure."
+    }
+  },
+  "per_scenario": {
+    "straight_walk": {
+      "n_frames": 90,
+      "n_questions": 90,
+      "n_objects": 1,
+      "concepts": [
+        "chair"
+      ],
+      "conditions": {
+        "A_stateless": {
+          "in_view": {
+            "n_queries": 90,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 9.546833138678324e-05,
+            "mean_range_error_m": 0.00010573393621557712
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.0836
+        },
+        "B_window": {
+          "in_view": {
+            "n_queries": 90,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 9.546833138678324e-05,
+            "mean_range_error_m": 0.00010573393621557712
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.0831
+        },
+        "C_box": {
+          "in_view": {
+            "n_queries": 90,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.003496847696132674,
+            "mean_range_error_m": 0.0038641965297561242
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.0835
+        },
+        "D_mask": {
+          "in_view": {
+            "n_queries": 90,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 9.546833138678324e-05,
+            "mean_range_error_m": 0.00010573393621557712
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.0835
+        }
+      }
+    },
+    "head_turn_away": {
+      "n_frames": 165,
+      "n_questions": 165,
+      "n_objects": 1,
+      "concepts": [
+        "chair"
+      ],
+      "conditions": {
+        "A_stateless": {
+          "in_view": {
+            "n_queries": 40,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.0003142482977097627,
+            "mean_range_error_m": 0.0005966929493264495
+          },
+          "out_of_view": {
+            "n_queries": 125,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.0367
+        },
+        "B_window": {
+          "in_view": {
+            "n_queries": 40,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.0003142482977097627,
+            "mean_range_error_m": 0.0005966929493264495
+          },
+          "out_of_view": {
+            "n_queries": 125,
+            "answer_rate": 0.24,
+            "mean_bearing_error_hours": 0.00013154023473550917,
+            "mean_range_error_m": 0.0010877041844124117
+          },
+          "wall_clock_s_for_scenario": 0.0372
+        },
+        "C_box": {
+          "in_view": {
+            "n_queries": 40,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.003563844365373847,
+            "mean_range_error_m": 0.007199997949706915
+          },
+          "out_of_view": {
+            "n_queries": 125,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.002319432166141098,
+            "mean_range_error_m": 0.01724483051432867
+          },
+          "wall_clock_s_for_scenario": 0.0401
+        },
+        "D_mask": {
+          "in_view": {
+            "n_queries": 40,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.0003142482977097627,
+            "mean_range_error_m": 0.0005966929493264495
+          },
+          "out_of_view": {
+            "n_queries": 125,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.00014437313719101752,
+            "mean_range_error_m": 0.0010686668867097922
+          },
+          "wall_clock_s_for_scenario": 0.0402
+        }
+      }
+    },
+    "head_turn_return": {
+      "n_frames": 240,
+      "n_questions": 240,
+      "n_objects": 1,
+      "concepts": [
+        "chair"
+      ],
+      "conditions": {
+        "A_stateless": {
+          "in_view": {
+            "n_queries": 110,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.0002707170106956576,
+            "mean_range_error_m": 0.0006134361471341326
+          },
+          "out_of_view": {
+            "n_queries": 130,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.1
+        },
+        "B_window": {
+          "in_view": {
+            "n_queries": 110,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.0002707170106956576,
+            "mean_range_error_m": 0.0006134361471341326
+          },
+          "out_of_view": {
+            "n_queries": 130,
+            "answer_rate": 0.23076923076923078,
+            "mean_bearing_error_hours": 0.00013154023473550917,
+            "mean_range_error_m": 0.0010877041844124117
+          },
+          "wall_clock_s_for_scenario": 0.1007
+        },
+        "C_box": {
+          "in_view": {
+            "n_queries": 110,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.0036085171060729706,
+            "mean_range_error_m": 0.006690683519107826
+          },
+          "out_of_view": {
+            "n_queries": 130,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.002331802094410676,
+            "mean_range_error_m": 0.01722683213979445
+          },
+          "wall_clock_s_for_scenario": 0.1041
+        },
+        "D_mask": {
+          "in_view": {
+            "n_queries": 110,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.0002707170106956576,
+            "mean_range_error_m": 0.0006134361471341326
+          },
+          "out_of_view": {
+            "n_queries": 130,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.00014514348814364744,
+            "mean_range_error_m": 0.0010675263471117801
+          },
+          "wall_clock_s_for_scenario": 0.1041
+        }
+      }
+    },
+    "cluttered_occlusion": {
+      "n_frames": 60,
+      "n_questions": 120,
+      "n_objects": 2,
+      "concepts": [
+        "chair"
+      ],
+      "conditions": {
+        "A_stateless": {
+          "in_view": {
+            "n_queries": 120,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.03445536152970659,
+            "mean_range_error_m": 1.5107967020325737
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.1113
+        },
+        "B_window": {
+          "in_view": {
+            "n_queries": 120,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.03445536152970659,
+            "mean_range_error_m": 1.5107967020325737
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.111
+        },
+        "C_box": {
+          "in_view": {
+            "n_queries": 120,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.03811948066989717,
+            "mean_range_error_m": 1.5112343770670194
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.1118
+        },
+        "D_mask": {
+          "in_view": {
+            "n_queries": 120,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.03445536152970659,
+            "mean_range_error_m": 1.5107967020325737
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.1115
+        }
+      }
+    },
+    "crossing_hazard": {
+      "n_frames": 90,
+      "n_questions": 90,
+      "n_objects": 1,
+      "concepts": [
+        "bicycle"
+      ],
+      "conditions": {
+        "A_stateless": {
+          "in_view": {
+            "n_queries": 90,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.0,
+            "mean_range_error_m": 0.0
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.083
+        },
+        "B_window": {
+          "in_view": {
+            "n_queries": 90,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.0,
+            "mean_range_error_m": 0.0
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.0823
+        },
+        "C_box": {
+          "in_view": {
+            "n_queries": 90,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.0038197135412580963,
+            "mean_range_error_m": 4.5759908480470634e-05
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.0828
+        },
+        "D_mask": {
+          "in_view": {
+            "n_queries": 90,
+            "answer_rate": 1.0,
+            "mean_bearing_error_hours": 0.0,
+            "mean_range_error_m": 0.0
+          },
+          "out_of_view": {
+            "n_queries": 0,
+            "answer_rate": 0.0,
+            "mean_bearing_error_hours": null,
+            "mean_range_error_m": null
+          },
+          "wall_clock_s_for_scenario": 0.0826
+        }
+      }
+    }
+  },
+  "metrics_not_implemented": {
+    "hazard_detection_rate": "No ground-truth hazard-event labels or hazard-trigger scoring exist in src/locus/eval/ -- only per-question bearing/range answerability is scored.",
+    "false_warnings": "Same reason: hazard warnings aren't a scored event type in the harness.",
+    "missed_hazards": "Same reason.",
+    "track_fragmentation": "No track-continuity/ID-switch metric is computed by src/locus/eval/metrics.py.",
+    "reassociation_performance": "SpatialMemoryGraph's re-association logic (memory/graph.py) isn't separately instrumented or scored by the eval harness.",
+    "ttc_prediction_performance": "geometry/kinematics.py computes TTC, but the eval harness does not compare it against a ground-truth TTC."
+  }
+}

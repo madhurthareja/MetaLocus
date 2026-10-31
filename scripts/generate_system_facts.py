@@ -1,0 +1,142 @@
+"""Compiles dashboard/data/reproducibility.json and dashboard/data/system_facts.json
+from facts already established and verified elsewhere in this repo (config/default.yaml,
+the real SANPO session's timeline.json, and the module docstrings/tests documenting the
+rotation-convention investigation). Pulls values rather than re-stating them from memory,
+so these files stay a faithful copy of what's actually true in the code right now.
+
+Usage: python scripts/generate_system_facts.py
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).parent.parent
+config = yaml.safe_load((ROOT / "config/default.yaml").read_text())
+
+sanpo_timeline_path = ROOT / "dashboard/data/sanpo_-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG/timeline.json"
+sanpo_timeline = json.loads(sanpo_timeline_path.read_text()) if sanpo_timeline_path.exists() else None
+
+reproducibility = {
+    "experiment_configuration": {
+        "perception": config["perception"],
+        "memory": config["memory"],
+        "kinematics": config["kinematics"],
+        "hazard": config["hazard"],
+        "image": config["image"],
+    },
+    "model_versions": {
+        "concept_proposal": {"name": "Muse Spark (Meta Model API)", "model_id": "muse-spark-1.3"},
+        "segmentation": {"name": "SAM 3.1 Object Multiplex", "version": "sam3.1", "use_fa3": False,
+                          "note": "use_fa3 disabled -- separate flash_attn_interface package not installed; plain attention used instead, some speed cost, no accuracy difference."},
+        "speech": config["tts"],
+    },
+    "dataset_splits": {
+        "sanpo": {
+            "role": "primary, scored dataset",
+            "sessions_used": config["sanpo_sequences"],
+            "source": "gs://gresearch/sanpo_dataset/v0 (public, ungated, CC-BY 4.0)",
+        },
+        "aea": {
+            "role": "secondary cross-dataset generalization check (indoor, different sensor + depth modality)",
+            "sequences_used": config["aea_sequences"],
+            "n_sequences": len(config["aea_sequences"]),
+        },
+        "synthetic": {
+            "role": "unit-test / eval-harness ground truth only, not a benchmark substitute",
+            "scenarios": ["straight_walk", "head_turn_away", "head_turn_return", "cluttered_occlusion", "crossing_hazard"],
+        },
+    },
+    "sensor_configuration": {
+        "sanpo": {
+            "camera_head": {"model": "ZED Mini", "stereo_baseline_mm": 62.958637, "role": "default RGB+depth source for load_sequence"},
+            "camera_chest": {"model": "ZED-2i", "stereo_baseline_mm": 119.918846, "role": "used only for the body-frame rotation-convention cross-validation"},
+            "intrinsics_source": "per-session description.json, session_camera_details[i].left_camera_params, selected by model name (not list order -- a prior bug used list index 0 unconditionally, fixed)",
+            "distortion": "none -- SANPO ships already-rectified pinhole intrinsics",
+        },
+        "aea": {
+            "camera": "Project Aria Gen1 RGB",
+            "native_sensor_resolution_px": 2880,
+            "distortion_model": "FISHEYE624",
+            "undistortion": "calibration.rotate_upright_zoom_only + pinhole rectification (projectaria_tools), verified against rendered frames, not just unit tests",
+        },
+    },
+    "camera_calibration": {
+        "sanpo_dense_depth_coverage_pct": 96,
+        "aea_sparse_depth_coverage_pct": 18,
+        "aea_depth_source": "semi-dense MPS SLAM point cloud, z-buffer projected into each frame's real pose",
+        "sanpo_depth_source": "dense CREStereo depth map shipped per-frame",
+    },
+    "thresholds": {
+        "ttc_threshold_seconds": config["hazard"]["ttc_threshold_seconds"],
+        "node_decay_half_life_seconds": config["memory"]["node_decay_half_life_seconds"],
+        "node_eviction_seconds": config["memory"]["node_eviction_seconds"],
+        "edge_radius_m": config["memory"]["edge_radius_m"],
+        "reacquire_bearing_tolerance_rad": config["memory"]["reacquire_bearing_tolerance_rad"],
+    },
+    "evaluation_protocol_pointer": "See dashboard/data/ablation_results.json for the full A/B/C/D protocol and results.",
+}
+
+system_facts = {
+    "pipeline_components": [
+        {"id": "camera", "name": "Camera input", "status": "real",
+         "detail": "SANPO (primary, dense depth) or AEA (secondary, sparse depth) recorded sequences, replayed frame-by-frame -- not a live feed. See PROJECT_PLAN.md's demo section for why replay was chosen over live camera."},
+        {"id": "spark", "name": "Muse Spark / Meta Model API", "status": "real",
+         "model_id": "muse-spark-1.3", "detail": "Proposes which object concepts to track from the first frame of a sequence. OpenAI-SDK-compatible client against api.meta.ai/v1."},
+        {"id": "sam31", "name": "SAM 3.1 Object Multiplex", "status": "real",
+         "version": "sam3.1", "detail": "One video session per concept (native API constraint, not a design choice -- no multi-concept single pass). use_fa3=False.",
+         "known_limitation": "scripts/smoke_test_sam31.py (per-session throughput with 4-6 concurrent concept sessions) is not yet filled in."},
+        {"id": "lifting", "name": "Median-depth mask lifting", "status": "real",
+         "detail": "lift() takes the median depth under a segmentation mask; lift_from_box() (condition C only) takes the median depth under the detection's bounding box instead."},
+        {"id": "memory_graph", "name": "Persistent world-memory graph", "status": "real",
+         "detail": "SpatialMemoryGraph: temporal decay, eviction, spatial re-association, periodic duplicate-node merging (found and fixed on real SAM 3.1 output -- see docs/CLAUDE.md)."},
+        {"id": "ttc", "name": "Geometric TTC", "status": "real",
+         "detail": "distance / closing speed, computed directly in geometry/kinematics.py. No learned model (explicitly not a GATv2/GNN)."},
+        {"id": "tts", "name": "SeamlessM4T v2", "status": "real", "model_id": config["tts"]["model_id"],
+         "detail": "Real open Meta speech model via transformers. Voicebox/Audiobox were investigated and found not publicly available."},
+        {"id": "hud", "name": "Ray-Ban Display output", "status": "simulated",
+         "detail": "No physical Ray-Ban Display hardware connected; HUD preview renders the same directive/tone data a real device would receive, clearly labelled as a preview, not a live hardware feed."},
+    ],
+    "body_frame_validation": {
+        "frames": {
+            "camera_frame": "F_ego -- OpenCV convention, +Z forward, +X right, +Y down.",
+            "body_frame": "F_body -- torso/clock-face frame, +Z = direction of travel from smoothed world-frame velocity, independent of head orientation.",
+            "world_frame": "F_world -- fixed world coordinates from each dataset's own pose source (AEA: MPS SLAM trajectory; SANPO: fixed_camera_poses.csv).",
+            "invariant_tested": "A static object's body-frame bearing stays constant under pure camera rotation -- tested directly in tests/test_geometry.py.",
+        },
+        "transform_consistency_check": {
+            "what": "Cross-validated the velocity-derived body-frame heading (core design assumption behind the whole clock-face/body split) against SANPO's literal, independently-measured chest-camera orientation -- the first time this project checked the body-frame approximation against anything other than 'it seems reasonable'.",
+            "result_median_heading_disagreement_degrees": 22,
+            "result_note": "Larger excursions occur during turns, where a velocity-smoothed estimate legitimately lags real-time orientation. This is a median-level agreement with real scatter, not an exact match.",
+            "bugs_found_by_this_check": [
+                "Camera intrinsics mixup: description.json's session_camera_details[0] was used unconditionally regardless of requested camera -- silently wrong for camera_chest. Fixed by selecting on `model` name, cross-verified against each camera's documented stereo baseline.",
+                "SANPO's local-forward axis is not OpenCV's +Z, unlike AEA. Found via systematic testing of all 6 candidate signed local axes against real velocity data -- local -X gives a clean ~22deg median residual, every other axis gives 100+ degrees of uncorrelated error.",
+            ],
+            "unresolved_caveat": "The up/right axes of SANPO's local rotation convention remain a genuinely open question: the dataset's own feature name (camera_quaternions_right_handed_y_up) implies translation Y is vertical, but the loader's own fixed_camera_poses.csv shows Z is the bounded (vertical-gait-bob) axis and Y is the dominant walking axis -- the opposite of what the name implies. This affects only lateral/vertical placement of lifted 3D points, not depth-along-ray or heading, which is why the heading validation above still holds despite this being unresolved. Full writeup: src/locus/data/sanpo_loader.py module docstring.",
+            "test_reference": "tests/test_sanpo_loader.py::test_velocity_derived_heading_matches_chest_camera_measured_heading",
+        },
+        "camera_intrinsics": {
+            "sanpo_camera_head": {"model": "ZED Mini", "stereo_baseline_mm": 62.958637},
+            "sanpo_camera_chest": {"model": "ZED-2i", "stereo_baseline_mm": 119.918846},
+            "aea": {"native_sensor_px": 2880, "distortion_model": "FISHEYE624"},
+        },
+    },
+    "real_sanpo_session_summary": sanpo_timeline and {
+        "session_id": sanpo_timeline["session_id"],
+        "fps": sanpo_timeline["fps"],
+        "n_frames": sanpo_timeline["n_frames"],
+        "concepts": sanpo_timeline["concepts"],
+        "total_detections": sanpo_timeline["total_detections"],
+        "total_lifted": sanpo_timeline["total_lifted"],
+        "edge_radius_m": sanpo_timeline["edge_radius_m"],
+        "final_graph_summary": sanpo_timeline["final_summary"],
+    },
+    "latency_disclaimer": "No per-stage wall-clock instrumentation exists in the production pipeline (scripts/generate_dashboard_data.py, scripts/run_real_sequence.py). Any latency figure shown for the real pipeline stages (Spark/SAM 3.1/TTS) would be fabricated -- the System page must mark per-stage latency as 'not measured' rather than show a number. The only real timing data in this repo is the synthetic eval harness's relative per-condition wall-clock comparison in dashboard/data/ablation_results.json, which explicitly is not a deployed-system latency benchmark.",
+}
+
+(ROOT / "dashboard/data/reproducibility.json").write_text(json.dumps(reproducibility, indent=2))
+(ROOT / "dashboard/data/system_facts.json").write_text(json.dumps(system_facts, indent=2))
+print("Wrote dashboard/data/reproducibility.json and dashboard/data/system_facts.json")

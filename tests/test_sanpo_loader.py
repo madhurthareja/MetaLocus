@@ -137,3 +137,23 @@ def test_velocity_derived_heading_matches_chest_camera_measured_heading():
         f"(median diff {np.median(np.abs(diffs)):.1f} deg) -- if this regresses, check "
         f"the rotation-convention assumptions in sanpo_loader.py's module docstring first"
     )
+
+
+def test_prefetch_populates_cache_so_iter_frames_does_no_network_io():
+    """prefetch() exists specifically because sequential per-frame downloads
+    were the actual bottleneck processing a full real session (minutes of
+    network wait, not SAM 3.1). Confirms it actually warms the cache."""
+    from locus.data.sanpo_loader import load_sequence
+
+    session_id = config["sanpo_sequences"][0]
+    seq = load_sequence(session_id, config=config)
+    seq.prefetch(max_frames=3, start_frame=50)
+
+    for i in range(50, 53):
+        name = f"{i:06d}"
+        assert (seq.cache_dir / "video_frames" / f"{name}.png").exists()
+        assert (seq.cache_dir / "depth_maps" / f"{name}.float16.gz").exists()
+
+    # Should now be purely local reads -- just confirm it still works end to end.
+    frames = list(seq.iter_frames(max_frames=3, start_frame=50))
+    assert len(frames) == 3

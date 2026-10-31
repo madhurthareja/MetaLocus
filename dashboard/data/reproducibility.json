@@ -1,0 +1,111 @@
+{
+  "experiment_configuration": {
+    "perception": {
+      "max_concepts": 6,
+      "concept_dwell_seconds": 5.0,
+      "proposer_interval_seconds": 1.5
+    },
+    "memory": {
+      "node_decay_half_life_seconds": 8.0,
+      "node_eviction_seconds": 20.0,
+      "edge_radius_m": 4.0,
+      "reacquire_bearing_tolerance_rad": 0.35
+    },
+    "kinematics": {
+      "walking_speed_mps": 1.4
+    },
+    "hazard": {
+      "ttc_threshold_seconds": 2.0
+    },
+    "image": {
+      "width": 640,
+      "height": 480
+    }
+  },
+  "model_versions": {
+    "concept_proposal": {
+      "name": "Muse Spark (Meta Model API)",
+      "model_id": "muse-spark-1.3"
+    },
+    "segmentation": {
+      "name": "SAM 3.1 Object Multiplex",
+      "version": "sam3.1",
+      "use_fa3": false,
+      "note": "use_fa3 disabled -- separate flash_attn_interface package not installed; plain attention used instead, some speed cost, no accuracy difference."
+    },
+    "speech": {
+      "backend": "seamless_m4t_v2",
+      "model_id": "facebook/seamless-m4t-v2-large",
+      "lang": "eng"
+    }
+  },
+  "dataset_splits": {
+    "sanpo": {
+      "role": "primary, scored dataset",
+      "sessions_used": [
+        "-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG"
+      ],
+      "source": "gs://gresearch/sanpo_dataset/v0 (public, ungated, CC-BY 4.0)"
+    },
+    "aea": {
+      "role": "secondary cross-dataset generalization check (indoor, different sensor + depth modality)",
+      "sequences_used": [
+        "loc5_script4_seq6_rec1",
+        "loc4_script1_seq1_rec1",
+        "loc3_script5_seq6_rec1",
+        "loc2_script2_seq4_rec2",
+        "loc1_script3_seq1_rec1",
+        "loc3_script5_seq3_rec1",
+        "loc3_script4_seq7_rec1",
+        "loc3_script3_seq1_rec1"
+      ],
+      "n_sequences": 8
+    },
+    "synthetic": {
+      "role": "unit-test / eval-harness ground truth only, not a benchmark substitute",
+      "scenarios": [
+        "straight_walk",
+        "head_turn_away",
+        "head_turn_return",
+        "cluttered_occlusion",
+        "crossing_hazard"
+      ]
+    }
+  },
+  "sensor_configuration": {
+    "sanpo": {
+      "camera_head": {
+        "model": "ZED Mini",
+        "stereo_baseline_mm": 62.958637,
+        "role": "default RGB+depth source for load_sequence"
+      },
+      "camera_chest": {
+        "model": "ZED-2i",
+        "stereo_baseline_mm": 119.918846,
+        "role": "used only for the body-frame rotation-convention cross-validation"
+      },
+      "intrinsics_source": "per-session description.json, session_camera_details[i].left_camera_params, selected by model name (not list order -- a prior bug used list index 0 unconditionally, fixed)",
+      "distortion": "none -- SANPO ships already-rectified pinhole intrinsics"
+    },
+    "aea": {
+      "camera": "Project Aria Gen1 RGB",
+      "native_sensor_resolution_px": 2880,
+      "distortion_model": "FISHEYE624",
+      "undistortion": "calibration.rotate_upright_zoom_only + pinhole rectification (projectaria_tools), verified against rendered frames, not just unit tests"
+    }
+  },
+  "camera_calibration": {
+    "sanpo_dense_depth_coverage_pct": 96,
+    "aea_sparse_depth_coverage_pct": 18,
+    "aea_depth_source": "semi-dense MPS SLAM point cloud, z-buffer projected into each frame's real pose",
+    "sanpo_depth_source": "dense CREStereo depth map shipped per-frame"
+  },
+  "thresholds": {
+    "ttc_threshold_seconds": 2.0,
+    "node_decay_half_life_seconds": 8.0,
+    "node_eviction_seconds": 20.0,
+    "edge_radius_m": 4.0,
+    "reacquire_bearing_tolerance_rad": 0.35
+  },
+  "evaluation_protocol_pointer": "See dashboard/data/ablation_results.json for the full A/B/C/D protocol and results."
+}

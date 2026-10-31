@@ -19,6 +19,7 @@ from flask import Flask, jsonify, render_template, send_from_directory
 DATA_DIR = Path(__file__).parent / "data"
 
 app = Flask(__name__)
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 
 def _sessions() -> list[str]:
@@ -47,10 +48,22 @@ def api_timeline(session: str):
     return json.loads(path.read_text())
 
 
+@app.route("/data/<name>.json")
+def data_root_json(name: str):
+    # Dataset-level files (ablation/reproducibility/system-facts) living
+    # directly under dashboard/data/, as opposed to a session's own
+    # timeline.json under dashboard/data/<session>/ -- a distinct literal
+    # ".json" suffix pattern so this never collides with the session route.
+    path = DATA_DIR / f"{name}.json"
+    if not path.exists():
+        return jsonify({"error": f"no such data file: {name}.json"}), 404
+    return send_from_directory(DATA_DIR, f"{name}.json")
+
+
 @app.route("/data/<session>/<path:filename>")
 def data_file(session: str, filename: str):
     return send_from_directory(DATA_DIR / session, filename)
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5050, debug=False)
+    app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)

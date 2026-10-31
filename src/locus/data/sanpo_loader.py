@@ -258,6 +258,32 @@ class SanpoSequence:
                     return self._poses[idx][1], self._poses[idx][2]
         raise ValueError(f"{self.session_id}: no READY pose found anywhere in {n} frames")
 
+    def prefetch(self, stride: int = 1, max_frames: int | None = None, start_frame: int = 0, workers: int = 16) -> None:
+        """Downloads every RGB+depth file `iter_frames` would need, in
+        parallel. Each is an independent HTTPS GET against a public bucket
+        (no shared state, no rate-limit auth to worry about) and `_download`
+        is already idempotent (skips anything already cached), so a thread
+        pool is a straightforward, large win over iter_frames' one-at-a-time
+        downloads -- sequential, this was the actual bottleneck processing a
+        full ~540-frame session (minutes of pure network wait with zero
+        CPU/GPU use), not SAM 3.1 or anything else in the pipeline."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        end = self.n_frames if max_frames is None else min(self.n_frames, start_frame + max_frames * stride)
+        urls_and_dests = []
+        for i in range(start_frame, end, stride):
+            name = f"{i:06d}"
+            urls_and_dests.append((
+                _session_url(self.session_id, self.camera, "video_frames", f"{name}.png"),
+                self.cache_dir / "video_frames" / f"{name}.png",
+            ))
+            urls_and_dests.append((
+                _session_url(self.session_id, self.camera, "depth_maps", f"{name}.float16.gz"),
+                self.cache_dir / "depth_maps" / f"{name}.float16.gz",
+            ))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(lambda pair: _download(*pair), urls_and_dests))
+
     def iter_frames(self, stride: int = 1, max_frames: int | None = None, start_frame: int = 0) -> Iterator[Frame]:
         from scipy.spatial.transform import Rotation
 
