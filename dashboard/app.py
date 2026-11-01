@@ -11,15 +11,38 @@ Run: python dashboard/app.py
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, send_from_directory
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
 DATA_DIR = Path(__file__).parent / "data"
 
 app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
+
+_COMPRESSIBLE_MIMETYPES = {"application/json", "text/html", "text/css", "application/javascript"}
+
+
+@app.after_request
+def _compress(response):
+    # A session's timeline.json runs ~7MB of repetitive numeric data --
+    # gzip takes that under 1MB. Only text/JSON responses benefit (the
+    # frame/mask video and audio files are already compressed); images
+    # would just waste CPU re-compressing incompressible bytes.
+    if (
+        response.mimetype not in _COMPRESSIBLE_MIMETYPES
+        or "gzip" not in request.headers.get("Accept-Encoding", "")
+        or response.direct_passthrough
+        or len(response.get_data()) < 1024
+    ):
+        return response
+    response.set_data(gzip.compress(response.get_data(), compresslevel=6))
+    response.headers["Content-Encoding"] = "gzip"
+    response.headers["Content-Length"] = len(response.get_data())
+    response.vary.add("Accept-Encoding")
+    return response
 
 
 def _sessions() -> list[str]:

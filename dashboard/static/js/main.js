@@ -1,4 +1,4 @@
-import { on, loadSessionList, loadSession, loadStaticData } from './state.js';
+import { state, on, loadSessionList, loadSession, loadStaticData, setAudioMuted } from './state.js';
 import { icon, refreshIcons } from './icons.js';
 import * as Overview from './pages/overview.js';
 import * as WorldMemory from './pages/worldmemory.js';
@@ -31,7 +31,7 @@ function buildShell() {
           <div class="hw-row"><span class="k">${icon('glasses')}Ray-Ban Display</span><span class="v" id="hw-glasses">simulated</span></div>
           <div class="hw-row"><span class="k">${icon('video')}Camera stream</span><span class="v" id="hw-camera">replay</span></div>
           <div class="hw-row"><span class="k">${icon('monitor')}Display res.</span><span class="v">600&times;600</span></div>
-          <div class="hw-row"><span class="k">${icon('volume-2')}Audio output</span><span class="v" id="hw-audio">--</span></div>
+          <div class="hw-row"><button class="hw-audio-toggle" id="hw-audio-toggle" title="Mute spoken directives">${icon('volume-2')}Audio output</button><span class="v" id="hw-audio">--</span></div>
           <div class="hw-row"><span class="k">${icon('database')}Dataset</span><span class="v" id="hw-dataset">--</span></div>
         </div>
       </aside>
@@ -105,6 +105,16 @@ function wireHeader() {
   // gated on this -- paused/idle must mean genuinely frozen, not just the
   // frame data standing still while decorative animation keeps running.
   on('playback-changed', ({ playing }) => document.documentElement.classList.toggle('is-playing', playing));
+
+  const audioToggle = document.getElementById('hw-audio-toggle');
+  const syncAudioToggle = () => {
+    audioToggle.innerHTML = icon(state.audioMuted ? 'volume-x' : 'volume-2') + 'Audio output';
+    audioToggle.classList.toggle('muted', state.audioMuted);
+    refreshIcons();
+  };
+  audioToggle.addEventListener('click', () => setAudioMuted(!state.audioMuted));
+  on('audio-muted-changed', syncAudioToggle);
+  syncAudioToggle();
 }
 
 async function boot() {

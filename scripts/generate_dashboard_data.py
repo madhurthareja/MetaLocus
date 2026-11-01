@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -33,12 +34,41 @@ from locus.memory.graph import SpatialMemoryGraph
 from locus.types import Instance3D
 
 DASHBOARD_IMG_WIDTH = 640
+N_CONCEPT_CHECKPOINTS = 3  # later re-proposal points through the clip, beyond the initial frame-0 one
+MAX_NEW_CONCEPTS_PER_CHECKPOINT = 2  # bounds extra SAM 3.1 sessions per checkpoint
 
 
 def _resize(rgb: np.ndarray) -> np.ndarray:
     h, w = rgb.shape[:2]
     scale = DASHBOARD_IMG_WIDTH / w
     return cv2.resize(rgb, (DASHBOARD_IMG_WIDTH, int(h * scale)))
+
+
+def _encode_session_video(image_dir: Path, out_path: Path, fps: float) -> None:
+    """The dashboard used to fetch every frame/mask as its own JPEG over
+    HTTP -- hundreds of uncompressed requests per session, which a
+    browser's 6-connections-per-origin cap and any real network latency
+    turn into stuttering playback. Muxing the same JPEGs into one H.264
+    file instead cuts that to a single request with real compression and
+    lets the browser's native <video> buffering do the work.
+
+    -g 1 (every frame an independent keyframe) trades away inter-frame
+    compression so the dashboard's frame-accurate scrubbing (a seek per
+    timeline tick during playback) stays cheap -- seeking into the middle
+    of a long GOP would otherwise have to decode back to its keyframe
+    first.
+    """
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-framerate", str(fps),
+            "-i", str(image_dir / "%05d.jpg"),
+            "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-g", "1", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            str(out_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
 
 
 def main() -> None:
@@ -60,7 +90,7 @@ def main() -> None:
         from locus.data.sanpo_loader import load_sequence
 
         session_id = args.sequence_id or config["sanpo_sequences"][0]
-        print(f"[1/6] Loading FULL SANPO session {session_id!r}...")
+        print(f"[1/7] Loading FULL SANPO session {session_id!r}...")
         seq = load_sequence(session_id, config=config)
         print(f"      {seq.n_frames} frames @ {seq.fps}fps = {seq.n_frames / seq.fps:.1f}s")
         print("      prefetching all RGB+depth files in parallel (16 workers)...")
@@ -70,7 +100,7 @@ def main() -> None:
         from locus.data.aea_loader import load_point_cloud, load_sequence
 
         session_id = args.sequence_id or config["aea_sequences"][0]
-        print(f"[1/6] Loading FULL AEA sequence {session_id!r}...")
+        print(f"[1/7] Loading FULL AEA sequence {session_id!r}...")
         seq = load_sequence(session_id, config=config)
         points_world = load_point_cloud(session_id, config=config)
         frames = list(seq.iter_frames(point_cloud_world=points_world))
@@ -78,7 +108,7 @@ def main() -> None:
         from locus.data import synthetic
 
         session_id = args.scenario
-        print(f"[1/6] Generating synthetic scenario {session_id!r} (deterministic ground truth, no GPU)...")
+        print(f"[1/7] Generating synthetic scenario {session_id!r} (deterministic ground truth, no GPU)...")
         scenario_fn = getattr(synthetic, args.scenario)
         frames, ground_truth = scenario_fn()
         print(f"      {len(frames)} frames @ {synthetic.FPS}fps")
@@ -100,14 +130,14 @@ def main() -> None:
 
     if ground_truth is not None:
         concepts = sorted({obj.concept for obj in ground_truth.objects})
-        print(f"[2/6] Concepts from synthetic ground truth: {concepts}")
+        print(f"[2/7] Concepts from synthetic ground truth: {concepts}")
     elif args.concepts:
         concepts = [c.strip() for c in args.concepts.split(",") if c.strip()]
-        print(f"[2/6] Using fixed concepts: {concepts}")
+        print(f"[2/7] Using fixed concepts: {concepts}")
     else:
         from locus.perception.spark_proposer import SparkProposer
 
-        print("[2/6] Proposing concepts from the first frame (Meta Model API, muse-spark-1.3)...")
+        print("[2/7] Proposing concepts from the first frame (Meta Model API, muse-spark-1.3)...")
         concepts = SparkProposer(max_concepts=config["perception"]["max_concepts"]).propose(frames[0], {})
         print(f"      Spark proposed: {concepts}")
 
@@ -119,20 +149,54 @@ def main() -> None:
         if ground_truth is not None:
             from locus.perception.mock_segmenter import MockSegmenter
 
-            print(f"[3/6] Using MockSegmenter (ground-truth-driven, no model) on concepts {concepts}...")
+            print(f"[3/7] Using MockSegmenter (ground-truth-driven, no model) on concepts {concepts}...")
             segmenter = MockSegmenter(ground_truth)
             segmenter.start(concepts)
         else:
             from locus.perception.sam3_native import Sam31NativeSegmenter
 
-            print(f"[3/6] Running real SAM 3.1 Object Multiplex on {len(concepts)} concepts across all {len(frames)} frames...")
+            print(f"[3/7] Running real SAM 3.1 Object Multiplex on {len(concepts)} concepts across all {len(frames)} frames...")
             segmenter = Sam31NativeSegmenter()
             segmenter.start(concepts)
             segmenter.prepare(frames, sam_frame_dir)
+
+            # The one-shot proposal above only ever sees the opening frame, so
+            # anything not visible yet at t=0 (a dog, scaffolding, a scooter
+            # two minutes in) was permanently outside the vocabulary for the
+            # rest of the walk -- Muse Spark was never asked again. Re-ask at
+            # a few later checkpoints and give any genuinely new concept its
+            # own forward-only session (add_concept_at, not a fresh
+            # whole-video prepare()) starting where it was actually noticed.
+            # N_CONCEPT_CHECKPOINTS stays small deliberately: each new
+            # concept costs one more SAM 3.1 session re-running the
+            # Perception Encoder, and this is a one-time batch generation
+            # run, not the live ~0.5Hz refresh PROJECT_PLAN.md describes for
+            # an always-on system -- that cadence (every ~2s) would mean
+            # dozens of extra sessions per clip, not a handful.
+            #
+            # Skipped when --concepts fixed the vocabulary explicitly: that's
+            # an intentional override, not something to second-guess, and
+            # SparkProposer was never imported on that path.
+            if not args.concepts:
+                from locus.perception.spark_proposer import SparkProposer
+
+                print(f"[3b/7] Re-checking for new concepts at {N_CONCEPT_CHECKPOINTS} later checkpoints...")
+                checkpoint_proposer = SparkProposer(max_concepts=config["perception"]["max_concepts"])
+                for k in range(1, N_CONCEPT_CHECKPOINTS + 1):
+                    idx = min(len(frames) - 1, round(len(frames) * k / (N_CONCEPT_CHECKPOINTS + 1)))
+                    proposed = checkpoint_proposer.propose(frames[idx], {})
+                    new_candidates = [c for c in proposed if c not in concepts][:MAX_NEW_CONCEPTS_PER_CHECKPOINT]
+                    for concept in new_candidates:
+                        if segmenter.add_concept_at(concept, start_frame_idx=idx):
+                            concepts.append(concept)
+                            concept_colors[concept] = palette[len(concept_colors) % len(palette)]
+                            print(f"       +{concept!r} at t={frames[idx].timestamp:.1f}s (frame {idx})")
+                        else:
+                            print(f"       skipped {concept!r} at frame {idx} -- Spark proposed it, SAM 3.1 found nothing there")
     finally:
         shutil.rmtree(sam_frame_dir, ignore_errors=True)
 
-    print("[4/6] Lifting detections, feeding the persistent memory graph, rendering per-frame output...")
+    print("[4/7] Lifting detections, feeding the persistent memory graph, rendering per-frame output...")
     graph = SpatialMemoryGraph(
         node_decay_half_life_seconds=config["memory"]["node_decay_half_life_seconds"],
         node_eviction_seconds=config["memory"]["node_eviction_seconds"],
@@ -269,7 +333,7 @@ def main() -> None:
     if hasattr(segmenter, "close"):
         segmenter.close()
 
-    print("[5/6] Writing timeline.json...")
+    print("[5/7] Writing timeline.json...")
     manifest = {
         "dataset": args.dataset,
         "session_id": session_id,
@@ -285,7 +349,11 @@ def main() -> None:
     }
     (out_dir / "timeline.json").write_text(json.dumps(manifest))
 
-    print(f"[6/6] Done. Wrote {len(frames)} frame/mask pairs, {len(audio_cache)} unique spoken clips to {out_dir}")
+    print("[6/7] Encoding frames.mp4 / masks.mp4...")
+    _encode_session_video(frames_dir, out_dir / "frames.mp4", seq.fps)
+    _encode_session_video(masks_dir, out_dir / "masks.mp4", seq.fps)
+
+    print(f"[7/7] Done. Wrote {len(frames)} frame/mask pairs, {len(audio_cache)} unique spoken clips to {out_dir}")
     print(f"      Total raw detections: {total_detections}, lifted to 3D: {total_lifted}")
     print(f"      Final graph: {graph.summary()}")
 

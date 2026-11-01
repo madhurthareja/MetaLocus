@@ -50,6 +50,7 @@ class Sam31NativeSegmenter:
         # some speed cost. Flip on once FA3 is actually set up on GB10.
         self._use_fa3 = use_fa3
         self._predictor = None
+        self._frame_dir: Path | None = None
         self._active_concepts: list[str] = []
         self._detections_by_frame: dict[int, list[Detection]] = {}
         self._cursor = 0
@@ -63,9 +64,6 @@ class Sam31NativeSegmenter:
     def start(self, concepts: list[str]) -> None:
         self._active_concepts = list(concepts)
         self._cursor = 0
-
-    def update_concepts(self, concepts: list[str]) -> None:
-        self._active_concepts = list(concepts)
 
     def _build_predictor(self):
         if self._predictor is None:
@@ -107,51 +105,89 @@ class Sam31NativeSegmenter:
         directory, not individual arrays), then runs one
         start_session/add_prompt/propagate_in_video/close_session cycle per
         active concept, merging results across concepts into a per-frame
-        Detection list. Call `start()` first to set the concept list."""
+        Detection list. Call `start()` first to set the concept list.
+
+        Kept as whole-video propagation (start_frame_idx=0, direction=both's
+        forward half) for the concepts known at session start, same as
+        before -- `add_concept_at()` below handles concepts discovered
+        later, propagating forward-only from the frame they were noticed."""
         frame_dir = Path(frame_dir)
         frame_dir.mkdir(parents=True, exist_ok=True)
         for i, frame in enumerate(frames):
             bgr = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR)
             cv2.imwrite(str(frame_dir / f"{i:05d}.jpg"), bgr)
 
-        predictor = self._build_predictor()
+        self._frame_dir = frame_dir
+        self._predictor = self._build_predictor()
         self._detections_by_frame = {i: [] for i in range(len(frames))}
 
         for concept in self._active_concepts:
-            session_id = self._start_session(predictor, str(frame_dir))
-            try:
-                predictor.handle_request(
-                    {
-                        "type": "add_prompt",
-                        "session_id": session_id,
-                        "frame_index": 0,
-                        "text": concept,
-                    }
-                )
-                for result in predictor.handle_stream_request(
-                    {"type": "propagate_in_video", "session_id": session_id}
-                ):
-                    frame_idx = result["frame_index"]
-                    outputs = result["outputs"]
-                    obj_ids = np.asarray(outputs["out_obj_ids"])
-                    masks = np.asarray(outputs["out_binary_masks"])
-                    boxes = np.asarray(outputs["out_boxes_xywh"])
-                    for obj_id, mask, box in zip(obj_ids, masks, boxes):
-                        key = (concept, int(obj_id))
-                        if key not in self._global_instance_ids:
-                            self._global_instance_ids[key] = self._next_global_instance_id
-                            self._next_global_instance_id += 1
-                        self._detections_by_frame.setdefault(frame_idx, []).append(
-                            Detection(
-                                concept=concept,
-                                instance_id=self._global_instance_ids[key],
-                                mask=mask.astype(bool),
-                                box_xywh_norm=tuple(float(v) for v in box),
-                                score=1.0,
-                            )
+            self._run_concept_session(concept, start_frame_idx=0)
+
+    def add_concept_at(self, concept: str, start_frame_idx: int) -> bool:
+        """Give a concept its own SAM 3.1 session starting at `start_frame_idx`
+        instead of frame 0 -- for a concept Muse Spark only noticed partway
+        through the walk (the one-shot, frame-0-only proposal this replaces
+        could never see anything that wasn't visible in the opening frame).
+
+        Deliberately NOT a fresh full-video session: `propagate_in_video`
+        natively supports `start_frame_idx` + `propagation_direction` (see
+        sam3_base_predictor.py), so this only tracks forward from where the
+        concept was actually noticed, same cost shape as any other
+        single-concept session, just starting later and running less of the
+        video. Returns False (and runs no propagation) if SAM 3.1 finds
+        nothing for this text at that frame -- Spark proposing a concept
+        doesn't guarantee it's actually there.
+        """
+        if self._predictor is None or self._frame_dir is None:
+            raise RuntimeError("add_concept_at() requires prepare() to have run first")
+        return self._run_concept_session(concept, start_frame_idx=start_frame_idx)
+
+    def _run_concept_session(self, concept: str, start_frame_idx: int) -> bool:
+        session_id = self._start_session(self._predictor, str(self._frame_dir))
+        found = False
+        try:
+            add_result = self._predictor.handle_request(
+                {
+                    "type": "add_prompt",
+                    "session_id": session_id,
+                    "frame_index": start_frame_idx,
+                    "text": concept,
+                }
+            )
+            if len(np.asarray(add_result["outputs"]["out_obj_ids"])) == 0:
+                return False  # Spark proposed this, but SAM 3.1 sees nothing here -- don't pay for propagation
+            found = True
+            for result in self._predictor.handle_stream_request(
+                {
+                    "type": "propagate_in_video",
+                    "session_id": session_id,
+                    "start_frame_index": start_frame_idx,
+                    "propagation_direction": "forward",
+                }
+            ):
+                frame_idx = result["frame_index"]
+                outputs = result["outputs"]
+                obj_ids = np.asarray(outputs["out_obj_ids"])
+                masks = np.asarray(outputs["out_binary_masks"])
+                boxes = np.asarray(outputs["out_boxes_xywh"])
+                for obj_id, mask, box in zip(obj_ids, masks, boxes):
+                    key = (concept, int(obj_id))
+                    if key not in self._global_instance_ids:
+                        self._global_instance_ids[key] = self._next_global_instance_id
+                        self._next_global_instance_id += 1
+                    self._detections_by_frame.setdefault(frame_idx, []).append(
+                        Detection(
+                            concept=concept,
+                            instance_id=self._global_instance_ids[key],
+                            mask=mask.astype(bool),
+                            box_xywh_norm=tuple(float(v) for v in box),
+                            score=1.0,
                         )
-            finally:
-                predictor.handle_request({"type": "close_session", "session_id": session_id})
+                    )
+        finally:
+            self._predictor.handle_request({"type": "close_session", "session_id": session_id})
+        return found
 
     def step(self, frame: Frame) -> list[Detection]:
         detections = self._detections_by_frame.get(self._cursor, [])

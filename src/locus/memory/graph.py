@@ -20,6 +20,7 @@ from locus.memory.node import NodeIdAllocator
 from locus.types import Edge, Instance3D, Node, Pose
 
 ASSOCIATION_GATE_M = 1.0
+VELOCITY_SMOOTHING_ALPHA = 0.3
 
 
 class SpatialMemoryGraph:
@@ -71,7 +72,31 @@ class SpatialMemoryGraph:
                 node = self.nodes[node_id]
                 dt = t - node.last_seen
                 if dt > 0:
-                    node.velocity_world = (instance.p_world - node.p_world) / dt
+                    # Exponential smoothing, not a raw single-step finite
+                    # difference -- a raw sample amplifies ordinary mask/
+                    # depth-lifting jitter into large spurious velocities for
+                    # genuinely static objects. Measured on the real SANPO
+                    # session: a static "pole" node's raw finite-difference
+                    # velocity swung between 1.4-2.9 m/s frame to frame on
+                    # pure lifting noise, then froze at a noisy 5.3 m/s once
+                    # the node stopped being re-observed (velocity is only
+                    # updated here, so one bad sample stays load-bearing for
+                    # as long as the node is remembered). compute_edges()
+                    # then read that stale/noisy velocity as real motion,
+                    # producing "critical" hazard alerts for poles sitting
+                    # directly to the side of the wearer's path (median
+                    # bearing ~87 degrees on the false-critical edges) --
+                    # not a threshold-tuning problem, a noise-amplification
+                    # one. VELOCITY_SMOOTHING_ALPHA=0.3 keeps a few frames of
+                    # inertia so one noisy sample can't fully determine the
+                    # estimate, while still converging to real sustained
+                    # motion (an actually-closing vehicle) within ~3-4
+                    # observations.
+                    instantaneous_v = (instance.p_world - node.p_world) / dt
+                    node.velocity_world = (
+                        VELOCITY_SMOOTHING_ALPHA * instantaneous_v
+                        + (1 - VELOCITY_SMOOTHING_ALPHA) * node.velocity_world
+                    )
                 node.p_world = instance.p_world.copy()
                 node.last_seen = t
                 node.observation_count += 1

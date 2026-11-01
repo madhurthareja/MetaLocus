@@ -52,7 +52,8 @@ export class CameraFeed {
       </div>
       <div class="card-body flush">
         <div class="camera-wrap">
-          <img id="cf-img" alt="camera frame">
+          <video id="cf-video-frames" muted playsinline preload="auto"></video>
+          <video id="cf-video-masks" muted playsinline preload="auto"></video>
           <div class="camera-overlay-top">
             <div class="live-chip"><span class="reddot"></span><span id="cf-state">REPLAY · PAUSED</span></div>
             <div class="cam-meta-chip mono"><div id="cf-res">640×360</div><div id="cf-t">t=0.0s · frame 0</div></div>
@@ -61,6 +62,9 @@ export class CameraFeed {
           <div class="cam-toolbar"><button class="icon-btn" id="cf-expand">${icon('maximize-2')}</button></div>
         </div>
       </div>`;
+    this.vFrames = this.container.querySelector('#cf-video-frames');
+    this.vMasks = this.container.querySelector('#cf-video-masks');
+
     this.container.querySelectorAll('.mask-toggle').forEach((b) =>
       b.addEventListener('click', () => { setShowMasks(b.dataset.v === '1'); this._syncMaskBtn(); })
     );
@@ -71,7 +75,15 @@ export class CameraFeed {
       refreshIcons();
     });
     on('frame-changed', () => this.render());
-    on('session-loaded', () => this.render());
+    on('session-loaded', ({ name }) => {
+      // One request per video instead of one per frame -- the browser's own
+      // buffering replaces the old preloadImages() flood, and src is only
+      // ever (re)assigned here, not per frame, so playback doesn't reload
+      // the video on every tick.
+      this.vFrames.src = `/data/${name}/frames.mp4`;
+      this.vMasks.src = `/data/${name}/masks.mp4`;
+      this.render();
+    });
     on('masks-toggled', () => this.render());
     on('playback-changed', () => this.render());
     on('node-hovered', ({ nodeId }) => this._highlightChip(nodeId));
@@ -87,11 +99,22 @@ export class CameraFeed {
     this.container.querySelectorAll('.cf-chip').forEach((c) => c.classList.toggle('active', Number(c.dataset.id) === nodeId));
   }
 
+  // All-intra encoding (see generate_dashboard_data.py) makes a seek per
+  // timeline tick cheap -- each frame is an independent keyframe, so this
+  // never has to decode backward through a GOP to land on it. Both videos
+  // stay seeked in lockstep (not just the visible one) so toggling
+  // Masks/Raw never shows a stale frame.
   render() {
     const frame = currentFrame();
     if (!frame || !state.session) return;
-    const kind = state.showMasks ? 'masks' : 'frames';
-    this.container.querySelector('#cf-img').src = `/data/${state.session}/${kind}/${String(state.idx).padStart(5, '0')}.jpg`;
+    const active = state.showMasks ? this.vMasks : this.vFrames;
+    const inactive = state.showMasks ? this.vFrames : this.vMasks;
+    active.style.display = 'block';
+    inactive.style.display = 'none';
+    [this.vFrames, this.vMasks].forEach((v) => {
+      const t = Number.isFinite(v.duration) ? Math.min(frame.t, Math.max(0, v.duration - 1 / 60)) : frame.t;
+      if (Math.abs(v.currentTime - t) > 1e-3) v.currentTime = t;
+    });
     this.container.querySelector('#cf-t').textContent = `t=${fmtS(frame.t)} · frame ${frame.frame}`;
     this.container.querySelector('#cf-res').textContent = `${state.manifest.dataset} · 640px`;
     const stateChip = this.container.querySelector('#cf-state');

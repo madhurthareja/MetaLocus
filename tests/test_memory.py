@@ -166,6 +166,66 @@ def test_duplicate_instance_ids_merge_once_they_converge_spatially():
     assert node_ids == {merged_node.node_id}
 
 
+def test_static_object_jitter_produces_smaller_velocity_than_raw_finite_difference():
+    """Real bug, found on the real SANPO session: node.velocity_world was a
+    raw single-step finite difference, so ordinary mask/depth-lifting jitter
+    on a genuinely static object (a street pole) produced spurious
+    velocities of 1.4-5.3 m/s. compute_edges()'s closing_speed() then read
+    that as real approach, producing "critical" hazard alerts for poles
+    sitting to the side of the wearer's path (median bearing ~87 degrees on
+    the false-critical edges) rather than ahead of it -- a noise-
+    amplification bug, not a threshold-tuning one. Smoothing must bring a
+    jittery-but-stationary object's estimated speed well below both a real
+    walking pace and what the old raw-difference formula would have given
+    for the same noisy positions."""
+    graph = SpatialMemoryGraph()
+    base = np.array([3.0, 0.0, 4.0])
+    rng = np.random.default_rng(0)
+    dt = 1 / 15  # matches real SANPO's frame rate
+    positions = [base + rng.normal(scale=0.1, size=3) for _ in range(12)]
+
+    raw_speeds = []
+    for i, p in enumerate(positions):
+        inst = Instance3D(
+            concept="pole", instance_id=1, p_cam=np.zeros(3),
+            p_world=p, extent=np.zeros(3), score=1.0,
+        )
+        graph.observe([inst], None, t=float(i) * dt)
+        if i > 0:
+            raw_speeds.append(float(np.linalg.norm((p - positions[i - 1]) / dt)))
+
+    node = next(iter(graph.nodes.values()))
+    smoothed_speed = float(np.linalg.norm(node.velocity_world))
+    avg_raw_speed = float(np.mean(raw_speeds))
+
+    assert smoothed_speed < avg_raw_speed * 0.6, (
+        f"smoothed speed ({smoothed_speed:.2f} m/s) should be well below the raw "
+        f"per-step finite-difference average ({avg_raw_speed:.2f} m/s) for a jittery-but-static object"
+    )
+    assert smoothed_speed < 1.0, f"a static object should not read as moving at near-walking pace, got {smoothed_speed:.2f} m/s"
+
+
+def test_sustained_motion_still_converges_despite_smoothing():
+    """Smoothing must not hide a genuinely approaching object -- a steady
+    velocity should still be recovered within a handful of real
+    observations, not permanently damped toward zero."""
+    graph = SpatialMemoryGraph()
+    true_velocity = np.array([0.0, 0.0, -2.0])  # 2 m/s, genuinely closing
+    pos = np.array([0.0, 0.0, 10.0])
+    dt = 1 / 15
+    for i in range(15):
+        inst = Instance3D(
+            concept="van", instance_id=1, p_cam=np.zeros(3),
+            p_world=pos.copy(), extent=np.zeros(3), score=1.0,
+        )
+        graph.observe([inst], None, t=float(i) * dt)
+        pos = pos + true_velocity * dt
+
+    node = next(iter(graph.nodes.values()))
+    recovered_speed = float(np.linalg.norm(node.velocity_world))
+    assert recovered_speed > 1.5, f"sustained real motion should still be recovered after smoothing, got {recovered_speed:.2f} m/s"
+
+
 def test_reentry_binds_to_same_node_id():
     global _OBJECT_ID_TO_INT
     _OBJECT_ID_TO_INT = {}
