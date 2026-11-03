@@ -36,7 +36,9 @@ Day-to-day project context for Claude Code: **[docs/CLAUDE.md](docs/CLAUDE.md)**
 | Real AEA loader (pose + fisheye-undistorted RGB) — secondary, cross-dataset check | Done, verified on all 8 downloaded sequences |
 | Real AEA sparse depth (semi-dense point cloud → per-frame z-buffer) | Done, ~18% pixel coverage (vs. SANPO's ~96%) — a known limitation of AEA specifically |
 | SAM 3.1 native segmenter | **Done** — real session wiring, run successfully on both real SANPO and AEA frames; mask quality verified visually, not just "it ran" |
-| Complete real-data thread (pose + RGB + depth + SAM 3.1 + memory graph + TTC + directives + spoken TTS) | `scripts/run_real_sequence.py --dataset {sanpo,aea} --speak` — one-shot script, proven working end-to-end on both datasets |
+| EdgeTAM live segmenter (`--segmenter edgetam`) | **Done** — genuinely causal/streaming alternative to SAM 3.1's batch pass, for the real-time path; ~10.5 FPS on real SANPO frames (vs. SAM 3.1's 0.17-0.68 FPS). Lower accuracy on long clips (no occlusion re-identification), substantially mitigated by periodic re-grounding — see `docs/CLAUDE.md` for real measured before/after numbers |
+| Spoken-directive pacing + dashboard playback speed | **Done** — at most one directive spoken per cooldown window (safety escalation always cuts in); cut one real session from 252 unique spoken clips to 23. See `docs/CLAUDE.md` |
+| Complete real-data thread (pose + RGB + depth + segmentation + memory graph + TTC + directives + spoken TTS) | `scripts/generate_dashboard_data.py --dataset {sanpo,aea} [--segmenter sam3.1\|edgetam]` is now the primary entry point (produces a full dashboard session); `scripts/run_real_sequence.py` was the original one-shot proof and still works but is superseded by it |
 | TTS (spoken directives) | **Done** — Meta SeamlessM4T v2 (`src/locus/actuation/tts.py`); Voicebox/Audiobox were investigated and are not actually available (see `docs/CLAUDE.md`) |
 | Duplicate-node bug (SAM 3.1 double-tracking one object → two memory-graph nodes) | **Found and fixed** on real data — see `docs/CLAUDE.md` |
 | `app/pipeline.py` (the productionized async version of the above) | Not yet built |
@@ -85,7 +87,7 @@ src/locus/
   config.py         config/default.yaml + LOCUS_<SECTION>__<KEY> env overrides
   geometry/          3 reference frames (ego/body/world), intrinsics, mask/box lifting, kinematics/TTC
   memory/            persistent spatial graph: decay, eviction, spatial re-association, edges
-  perception/        Segmenter + ConceptProposer protocols; mocks (ground-truth-driven); SAM 3.1 native/HF stubs
+  perception/        Segmenter + ConceptProposer protocols; mocks (ground-truth-driven); SAM 3.1 native (batch) + EdgeTAM (live/streaming) backends; real Spark proposer
   data/              synthetic scenario generator (unit-test harness); real AEA loader (sparse depth); real SANPO loader (dense depth)
   eval/              A/B/C/D ablation conditions, metrics, question generation, CLI harness
   actuation/         stereo-pan + TTC-pulse audio cues; ≤6-word spoken directives

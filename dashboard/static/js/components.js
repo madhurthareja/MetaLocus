@@ -286,7 +286,7 @@ export class EventTimeline {
       <div class="timeline-controls">
         <button class="icon-btn" id="tl-play">${icon('play')}</button>
         <select class="hdr-select" id="tl-speed">
-          <option value="2">2x</option><option value="1" selected>1x</option><option value="0.5">0.5x</option><option value="0.25">0.25x</option>
+          <option value="2">2x</option><option value="1">1x</option><option value="0.5" selected>0.5x</option><option value="0.25">0.25x</option>
         </select>
         <span class="timeline-time mono" id="tl-time">0.0s / 0.0s</span>
         <span class="spacer" style="flex:1"></span>

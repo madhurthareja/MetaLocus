@@ -66,7 +66,7 @@ the dataset's own docs, which say npz -- the actual files are not npz):
   gave essentially random-looking errors around 100+ degrees -- this part
   is solid.
 
-  The up/right axes are a genuinely open question, not just an unverified
+  The up axis is a genuinely open question, not just an unverified
   algebraic afterthought. The repo names the quaternion feature
   `camera_quaternions_right_handed_y_up`, which reads as "translation Y is
   vertical" -- but checked directly against this loader's own
@@ -86,22 +86,37 @@ the dataset's own docs, which say npz -- the actual files are not npz):
   reading of the feature name). Both choices give *identical* results on
   every heading check run so far, because a heading check only exercises
   the forward column of the correction matrix -- it cannot distinguish
-  between them. This matters for lifted 3D points' lateral/vertical
-  position; it does not affect depth-along-ray or heading, which is why
-  the cross-camera validation below still means what it says.
+  between them. This matters for lifted 3D points' vertical position; it
+  does not affect depth-along-ray or heading, which is why the
+  cross-camera validation below still means what it says.
 
-  Applying the (forward-confirmed, up/right-unconfirmed) correction is
-  what let a real cross-camera validation succeed on the part it can
-  check: the head camera's velocity-derived body-frame heading agrees
-  with the *literal* chest-camera-measured heading at a median of ~22
-  degrees (occasional larger excursions correspond to turns, where a
-  velocity-smoothed heading estimate lags real-time orientation by
-  construction) -- the first validation of locus.geometry.frames' core
-  approximation against a directly recorded body-frame reference, rather
-  than just "it seems like a reasonable thing to assume." Resolving the
-  up/right ambiguity with certainty needs either the dataset maintainers
-  directly (sanpo_dataset@google.com, per the repo README) or a
-  validation that actually exercises lateral position, not just heading.
+  **The right axis was *also* unconfirmed here, and turned out to be
+  genuinely wrong, not just unverified** -- found once the dashboard made
+  bearing/clock-face directions actually observable end to end (a real
+  object visibly on the camera's right was being reported as "9 o'clock",
+  left). Confirmed and fixed via two independent checks (full detail in
+  `_R_SANPO_LOCAL_FROM_OPENCV`'s own comment below): `locus.geometry.frames`'
+  body-frame right/up/forward math tested correctly in isolation against a
+  synthetic scenario with no SANPO-specific code involved, and
+  reconstructing a real detection's camera-frame point and re-projecting
+  it with the right-mapping row's sign flipped moved its reported bearing
+  from the wrong side to the correct one. Pure sign flip, isolated to
+  lateral placement -- doesn't touch the forward/heading result validated
+  below.
+
+  Applying the (now forward- and right-confirmed, up-still-unconfirmed)
+  correction is what let a real cross-camera validation succeed on the
+  part it can check: the head camera's velocity-derived body-frame
+  heading agrees with the *literal* chest-camera-measured heading at a
+  median of ~22 degrees (occasional larger excursions correspond to
+  turns, where a velocity-smoothed heading estimate lags real-time
+  orientation by construction) -- the first validation of
+  locus.geometry.frames' core approximation against a directly recorded
+  body-frame reference, rather than just "it seems like a reasonable
+  thing to assume." Resolving the up-axis ambiguity with certainty needs
+  either the dataset maintainers directly (sanpo_dataset@google.com, per
+  the repo README) or a validation that actually exercises vertical
+  position, not just heading.
 
 Not yet done: only camera_head is used by `load_sequence`'s default;
 camera_chest is read by the lower-level helpers (as used in the
@@ -145,7 +160,7 @@ _BASELINE_TOLERANCE_MM = 5.0
 # Forward (-X): confirmed empirically, robustly -- see the module
 # docstring's rotation-convention note.
 #
-# Up/right: UNRESOLVED, not independently confirmed. The repo names the
+# Up: UNRESOLVED, not independently confirmed. The repo names the
 # quaternion feature `camera_quaternions_right_handed_y_up`, which reads
 # as "translation Y is vertical" -- but checked directly against this
 # loader's own fixed_camera_poses.csv data, Y is NOT the bounded axis: on
@@ -170,9 +185,31 @@ _BASELINE_TOLERANCE_MM = 5.0
 # this with certainty needs either the dataset maintainers directly
 # (sanpo_dataset@google.com, per the repo README) or a validation that
 # actually exercises lateral position, not just heading.
+#
+# Right: WAS also unresolved -- found genuinely wrong, not just
+# unconfirmed, once the dashboard made bearing/clock-face directions
+# actually observable end to end. A real object visually on the camera's
+# right (e.g. a parked van, frame 8 of the default session) was being
+# reported as "9 o'clock" (left). Isolated with two independent checks
+# before touching this matrix, per this file's own established discipline
+# of not guessing axis fixes silently: (1) locus.geometry.frames'
+# body-frame right/up/forward math, tested standalone against an
+# unambiguous synthetic East/North/Up scenario with no SANPO-specific code
+# involved, gives the physically correct sign -- that logic was never the
+# bug; (2) reconstructing the real camera-frame point for that van
+# (inverting the then-current R_world_cam) and re-projecting it through a
+# version of this matrix with only the right-mapping row sign-flipped
+# turned its reported bearing from -86.6 degrees (left) to +104.6 degrees
+# (right) -- the correct side, confirming the fix. The row below was
+# `[1, 0, 0]` (camera-right -> SANPO-local +Y); it's now `[-1, 0, 0]`
+# (camera-right -> SANPO-local -Y). This is a pure sign flip of the
+# right/left mapping only -- forward and up (confirmed/chosen above) are
+# untouched, and it does not affect range or depth-along-ray, only lateral
+# placement and anything derived from it (bearing, clock-face position,
+# stereo audio pan, the 3D World View's left/right layout).
 _R_SANPO_LOCAL_FROM_OPENCV = np.array([
     [0.0, 0.0, -1.0],
-    [1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0],
     [0.0, -1.0, 0.0],
 ])
 

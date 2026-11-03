@@ -24,7 +24,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from locus.actuation.directives import describe
+from locus.actuation.directives import describe, is_critical
+from locus.actuation.narrator import SparkNarrator
 from locus.actuation.tts import build_tts_backend
 from locus.config import DEFAULT_CONFIG_PATH, load_config
 from locus.geometry.frames import ego_to_world
@@ -37,11 +38,39 @@ DASHBOARD_IMG_WIDTH = 640
 N_CONCEPT_CHECKPOINTS = 3  # later re-proposal points through the clip, beyond the initial frame-0 one
 MAX_NEW_CONCEPTS_PER_CHECKPOINT = 2  # bounds extra SAM 3.1 sessions per checkpoint
 
+# Spoken-directive pacing. Before this, a directive+audio clip was attached
+# to every hazard edge on every frame -- correct per-frame, but a blind
+# listener experiences this in real time, not as a data table: the moment
+# phrasing shifted by even one clock-position bucket, a brand-new clip
+# would fire the instant the previous one finished, with no gap to actually
+# process what was just said. Real accessibility audio needs silence
+# between cues. Only one edge (the single most urgent, same selection rule
+# the dashboard already used client-side) is ever elected to speak per
+# frame, and only when enough time has passed since the last spoken cue --
+# except a genuine escalation into critical range, which always cuts in
+# immediately. Safety beats pacing; routine updates don't.
+DIRECTIVE_COOLDOWN_S = 3.0  # normal pacing -- long enough to finish a ~1s phrase and leave a breath after it
+CRITICAL_COOLDOWN_S = 1.2  # a still-critical object gets re-confirmed more often, but still not every frame
+
 
 def _resize(rgb: np.ndarray) -> np.ndarray:
     h, w = rgb.shape[:2]
     scale = DASHBOARD_IMG_WIDTH / w
     return cv2.resize(rgb, (DASHBOARD_IMG_WIDTH, int(h * scale)))
+
+
+def _most_urgent_edge(edges):
+    """Which single edge the system would actually speak about this frame --
+    same selection rule the dashboard already applies client-side
+    (state.js's mostUrgentEdge), moved here so the real pipeline picks the
+    same one edge rather than treating every tracked hazard as equally
+    speakable."""
+    if not edges:
+        return None
+    with_ttc = [e for e in edges if e.ttc_s is not None]
+    if with_ttc:
+        return min(with_ttc, key=lambda e: e.ttc_s)
+    return min(edges, key=lambda e: e.range_m)
 
 
 def _encode_session_video(image_dir: Path, out_path: Path, fps: float) -> None:
@@ -77,6 +106,16 @@ def main() -> None:
     parser.add_argument("--dataset", choices=["aea", "sanpo", "synthetic"], default="sanpo")
     parser.add_argument("--scenario", default="crossing_hazard", help="synthetic scenario name (--dataset synthetic only)")
     parser.add_argument("--concepts", default=None, help="comma-separated; auto-picked via Spark if omitted (ignored for synthetic)")
+    parser.add_argument(
+        "--segmenter",
+        choices=["sam3.1", "edgetam"],
+        default="sam3.1",
+        help="sam3.1: whole-clip batch propagation, highest accuracy (default). "
+        "edgetam: genuinely causal/streaming (no look-ahead), the real-time-capable "
+        "path -- grounds each concept via one one-shot SAM 3.1 add_prompt call, "
+        "then tracks live frame-by-frame with EdgeTAM (ignored for synthetic, which "
+        "always uses MockSegmenter).",
+    )
     parser.add_argument("--edge-radius-m", type=float, default=20.0)
     parser.add_argument("--out", default=None, help="output dir, default dashboard/data/<dataset>_<session>")
     parser.add_argument("--speak", action="store_true", default=True)
@@ -152,7 +191,7 @@ def main() -> None:
             print(f"[3/7] Using MockSegmenter (ground-truth-driven, no model) on concepts {concepts}...")
             segmenter = MockSegmenter(ground_truth)
             segmenter.start(concepts)
-        else:
+        elif args.segmenter == "sam3.1":
             from locus.perception.sam3_native import Sam31NativeSegmenter
 
             print(f"[3/7] Running real SAM 3.1 Object Multiplex on {len(concepts)} concepts across all {len(frames)} frames...")
@@ -193,6 +232,39 @@ def main() -> None:
                             print(f"       +{concept!r} at t={frames[idx].timestamp:.1f}s (frame {idx})")
                         else:
                             print(f"       skipped {concept!r} at frame {idx} -- Spark proposed it, SAM 3.1 found nothing there")
+        else:
+            from locus.perception.edgetam_segmenter import EdgeTamSegmenter
+
+            print(
+                f"[3/7] Running EdgeTAM (causal/streaming, no look-ahead) on {len(concepts)} "
+                f"concepts across all {len(frames)} frames -- grounded via one-shot SAM 3.1 "
+                "text->box calls as each concept is first encountered..."
+            )
+            segmenter = EdgeTamSegmenter()
+            segmenter.start(concepts)
+
+            # EdgeTAM's step() already tries to ground any not-yet-grounded
+            # active concept on every frame it's given (see
+            # edgetam_segmenter.py) -- unlike SAM 3.1's one-shot, whole-clip
+            # proposal, it doesn't need a special "start tracking from here"
+            # call. So widening the vocabulary at the same later checkpoints
+            # SAM 3.1 uses is just appending to the active-concepts list;
+            # EdgeTAM picks each one up the first frame it's actually visible.
+            if not args.concepts:
+                from locus.perception.spark_proposer import SparkProposer
+
+                print(f"[3b/7] Re-checking for new concepts at {N_CONCEPT_CHECKPOINTS} later checkpoints...")
+                checkpoint_proposer = SparkProposer(max_concepts=config["perception"]["max_concepts"])
+                for k in range(1, N_CONCEPT_CHECKPOINTS + 1):
+                    idx = min(len(frames) - 1, round(len(frames) * k / (N_CONCEPT_CHECKPOINTS + 1)))
+                    proposed = checkpoint_proposer.propose(frames[idx], {})
+                    new_candidates = [c for c in proposed if c not in concepts][:MAX_NEW_CONCEPTS_PER_CHECKPOINT]
+                    if new_candidates:
+                        concepts.extend(new_candidates)
+                        for concept in new_candidates:
+                            concept_colors[concept] = palette[len(concept_colors) % len(palette)]
+                        segmenter.update_concepts(concepts)
+                        print(f"       widened vocabulary with {new_candidates} at t={frames[idx].timestamp:.1f}s (frame {idx})")
     finally:
         shutil.rmtree(sam_frame_dir, ignore_errors=True)
 
@@ -203,6 +275,10 @@ def main() -> None:
         edge_radius_m=args.edge_radius_m,
     )
     tts = build_tts_backend(config) if args.speak else None
+    # Narration only matters if something will actually speak it; gated on
+    # --speak the same way `tts` is, so --no-speak never pays for the API
+    # calls either.
+    narrator = SparkNarrator() if args.speak else None
     audio_cache: dict[str, str] = {}  # directive text -> wav filename
     node_extent: dict[int, np.ndarray] = {}  # node_id -> most recent observed extent (Node has no extent field)
     node_events: list[dict] = []  # a running log of create/re-associate/merge/evict, for World Memory's event log
@@ -212,6 +288,8 @@ def main() -> None:
     wearer_velocity = np.zeros(3)
     total_detections = total_lifted = 0
     seen_node_ids: set[int] = set()
+    last_spoken_t: float | None = None
+    last_spoken_was_critical = False
 
     for i, frame in enumerate(frames):
         detections = segmenter.step(frame)
@@ -260,14 +338,46 @@ def main() -> None:
         graph.step(frame.timestamp)
 
         edges = graph.edges(frame.pose.t_world_cam, wearer_velocity)
+
+        # Pick at most one edge to actually speak this frame (see
+        # DIRECTIVE_COOLDOWN_S's comment above) -- every edge still gets a
+        # directive string and a record either way, for the dashboard's own
+        # display of full tracked state, but only the elected one gets an
+        # audio clip attached.
+        most_urgent = _most_urgent_edge(edges)
+        speak_node_id = None
+        if most_urgent is not None:
+            now_critical = is_critical(most_urgent)
+            elapsed = float("inf") if last_spoken_t is None else frame.timestamp - last_spoken_t
+            cooldown = CRITICAL_COOLDOWN_S if now_critical else DIRECTIVE_COOLDOWN_S
+            escalating = now_critical and not last_spoken_was_critical
+            if last_spoken_t is None or escalating or elapsed >= cooldown:
+                speak_node_id = most_urgent.dst_node_id
+                last_spoken_t = frame.timestamp
+                last_spoken_was_critical = now_critical
+
         edge_records = []
         for edge in edges:
             node = graph.nodes[edge.dst_node_id]
-            directive = describe(node.concept, edge)
-            if tts is not None and directive not in audio_cache:
-                fname = f"{hashlib.sha1(directive.encode()).hexdigest()[:10]}.wav"
-                tts.synthesize_to_file(directive, str(audio_dir / fname))
-                audio_cache[directive] = fname
+            # The warm, narrated voice only ever applies to the one edge
+            # actually chosen to speak this frame, and only when it isn't
+            # critical -- an imminent hazard always gets the fast, local,
+            # no-API-call describe() path instead, deliberately, regardless
+            # of whether narrator is available. Every other (non-spoken)
+            # edge also uses describe() here, purely as cheap display text
+            # for the UI's tables -- not worth an API call for something
+            # that's never actually going to be spoken.
+            if narrator is not None and edge.dst_node_id == speak_node_id and not is_critical(edge):
+                directive = narrator.narrate(node.concept, edge)
+            else:
+                directive = describe(node.concept, edge)
+            audio = None
+            if edge.dst_node_id == speak_node_id:
+                if tts is not None and directive not in audio_cache:
+                    fname = f"{hashlib.sha1(directive.encode()).hexdigest()[:10]}.wav"
+                    tts.synthesize_to_file(directive, str(audio_dir / fname))
+                    audio_cache[directive] = fname
+                audio = audio_cache.get(directive)
             edge_records.append(
                 {
                     "node_id": edge.dst_node_id,
@@ -277,7 +387,7 @@ def main() -> None:
                     "ttc_s": round(edge.ttc_s, 2) if edge.ttc_s is not None else None,
                     "confidence": round(node.confidence, 2),
                     "directive": directive,
-                    "audio": audio_cache.get(directive),
+                    "audio": audio,
                 }
             )
 

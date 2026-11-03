@@ -19,8 +19,12 @@ CUDA 13.0 toolkit, torch 2.10.0+cu128 (works despite GB10's compute
 capability 12.1 being just above that build's stated max of 12.0 --
 verified with a real CUDA matmul, not assumed). Memory capacity is not the
 constraint; per-concept SAM 3.1 session throughput (each reruns the
-Perception Encoder) is still the untested unknown -- `scripts/smoke_test_sam31.py`
-needs to actually be filled in and run.
+Perception Encoder) was the untested unknown -- now measured for real by
+`scripts/smoke_test_sam31.py` (no longer a stub): 1/3/6 concurrent concept
+sessions over the same real frame window took 35.3s/77.1s/144.4s (~35s,
+~26s, ~24s per session respectively) -- `prepare()` runs sessions strictly
+sequentially, so elapsed scales with concept count, not GPU contention.
+Results in `dashboard/data/sam31_smoke_test.json`.
 
 ## Naming: Locus, not hazard_agent
 The project was restructured mid-build around a more detailed, independently-
@@ -166,6 +170,77 @@ Real and verified since the above was first written:
   it: node count there dropped from 11 to 10, the duplicate pair gone,
   the two genuinely-distinct nearby chairs (1.48m apart, outside the gate)
   correctly left alone.
+- **The dashboard** (`dashboard/app.py` + `scripts/generate_dashboard_data.py`)
+  is the real pipeline's actual front end now, superseding
+  `scripts/run_real_sequence.py` as the way to produce and view a full
+  real-data run: Spark concept proposal (re-asked at checkpoints through
+  the clip, not just frame 0 -- a one-shot opening-frame proposal can never
+  see a concept that enters later), segmentation, lifting, the persistent
+  memory graph, TTC, directives, real TTS, muxed into per-session
+  `frames.mp4`/`masks.mp4`/`timeline.json`/audio that a 5-page browser UI
+  replays.
+- **EdgeTAM live-segmentation backend**
+  (`src/locus/perception/edgetam_segmenter.py`), added alongside SAM 3.1 as
+  a second, genuinely-causal/streaming `Segmenter` (`--segmenter edgetam`
+  on `generate_dashboard_data.py`), for the real-time path SAM 3.1's
+  whole-clip batch design can't offer (see `sam3_native.py` for that
+  constraint). Loaded via `transformers`' native EdgeTAM port
+  (`yonigozlan/EdgeTAM-hf`, 56MB, model_type `edgetam_video`), which, like
+  the rest of SAM 2's lineage, is point/box-prompted, not text-prompted --
+  something still has to turn a Spark-proposed concept string into a box.
+  That's `Sam31NativeSegmenter.ground_text()` (new): one cheap
+  `add_prompt` call, no `propagate_in_video`, used as EdgeTAM's default
+  grounder. Measured on real SANPO frames on GB10: ~10.5 FPS tracking 3
+  simultaneous objects causally (vs. SAM 3.1's 0.17-0.68 FPS batch
+  propagation) -- a real, large speed win, at a real, large accuracy cost
+  on long clips (below).
+  - **A real cost bug, found and fixed**: a concept that never grounds
+    (Spark proposed it, nothing there) was retried every single frame
+    forever -- 687 SAM 3.1 grounding calls for 10 concepts across one
+    539-frame run, which would make this impractical for actual live use
+    (paying for a full SAM 3.1 session every frame indefinitely for
+    anything not yet in view). Fixed with `ground_retry_interval` (default
+    15 frames) -- same run afterward: 30 calls.
+  - **A real accuracy limitation, measured, not assumed**: EdgeTAM is
+    causal with no reverse pass and no occlusion re-identification. On a
+    full real 539-frame (36s) SANPO walk, tracked node count fell from 11
+    live mid-clip to 2 by the end (vs. SAM 3.1's batch pass holding ~84
+    steady), and only 13.8% of raw detections lifted to 3D (vs. SAM 3.1's
+    ~93%). This is the actual EdgeTAM/SAM-2-lineage tradeoff, not a
+    regression.
+  - **Mitigation: periodic re-grounding** (`reground_interval`, default 45
+    frames) -- every interval, each already-tracked concept gets one fresh
+    SAM 3.1 box re-anchored to its *existing* object id (lands on a
+    frame_idx the session has never seen, so it's automatically treated as
+    a fresh conditioning frame, no special "reinit" path needed). A
+    transient miss (object briefly occluded) leaves the existing track
+    alone rather than dropping it. Same 539-frame run with this on: final
+    node count 2 -> 9, lift rate 13.8% -> 45.0%, node count held near-peak
+    (11 -> 9) almost to the end of the clip instead of collapsing partway
+    through. Still short of SAM 3.1's batch-pass numbers (expected -- a
+    periodic box re-anchor is a cheaper correction than full
+    forward+reverse occlusion reassociation), but a large, real
+    improvement over uncorrected causal drift.
+- **Spoken-directive pacing** (`generate_dashboard_data.py`,
+  `DIRECTIVE_COOLDOWN_S`/`CRITICAL_COOLDOWN_S`): found and fixed a real
+  UX problem, not a technical bug -- a directive+audio clip was being
+  attached to *every* tracked hazard edge on *every* frame, so a brand-new
+  clip would fire the instant the previous one finished playing the moment
+  phrasing shifted by even one clock-position bucket. A blind listener
+  hears this in real time, not as a data table; constant back-to-back
+  audio with no gap to process it is unusable even when each individual
+  cue is accurate. Now at most one edge (the single most urgent -- same
+  selection rule the dashboard already used client-side, moved here so the
+  real pipeline and the UI agree) is elected to speak per frame, gated by
+  a cooldown since the last spoken cue (3.0s normal, 1.2s if still
+  critical) -- except a genuine escalation into critical range, which
+  always cuts in immediately regardless of cooldown. Measured effect on
+  the same real 539-frame run: 252 unique spoken clips -> 23. Dashboard
+  default playback speed also dropped from 1x to 0.5x
+  (`dashboard/static/js/state.js`) -- the real audience hears this in real
+  time rather than reading a feed, and full walking-pace playback
+  compresses real-world gaps between cues tighter than a first-time
+  listener can actually follow.
 
 Still not done:
 - **`src/locus/app/pipeline.py`** -- the productionized async version of
@@ -245,10 +320,6 @@ Still not done:
   scatter, not an exact match, and that the up/right axis question would
   need the dataset maintainers (sanpo_dataset@google.com) or a
   lateral-position-specific test to fully resolve.
-- `scripts/smoke_test_sam31.py` -- still raises `NotImplementedError`.
-  This is the one open question that's actually load-bearing for the live
-  demo: real per-session FPS with 4-6 concurrent SAM 3.1 concept sessions
-  on GB10, needed before locking in live concept count / frame rate.
 - `requirements.lock.txt` / `docs/environment.md` -- not yet written.
 
 ## External resources (outside this repo, on the shared DGX box)
@@ -279,10 +350,14 @@ Still not done:
 2. `use_fa3=False` (see above) means SAM 3.1 inference isn't running at
    its intended speed. Worth revisiting if live-demo FPS matters more than
    it currently does for a one-shot/offline proof of the full thread.
-3. Automatic concept selection (the Spark/SparkProposer side of the
-   architecture) isn't wired to a real model yet -- `scripts/run_real_sequence.py`
-   takes a manually-specified concept list. Needed once live/automatic
-   concept proposing (vs. a fixed list) matters.
+3. ~~Automatic concept selection isn't wired to a real model yet~~ --
+   **done.** `SparkProposer` (`src/locus/perception/spark_proposer.py`) calls
+   the real Meta Model API (muse-spark-1.3, OpenAI-compatible endpoint at
+   `api.meta.ai/v1`) and is the default concept source in
+   `scripts/generate_dashboard_data.py` (manual `--concepts` is now the
+   override, not the default). It also re-asks at a few later checkpoints
+   through a clip, not just frame 0 -- see the EdgeTAM/dashboard entry
+   below for why a one-shot opening-frame proposal isn't enough on its own.
 
 ## Conventions
 - Report ablation results (A/B/C/D, especially C vs D) honestly even if a

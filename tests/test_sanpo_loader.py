@@ -139,6 +139,57 @@ def test_velocity_derived_heading_matches_chest_camera_measured_heading():
     )
 
 
+def test_camera_right_maps_to_positive_body_frame_bearing():
+    """Regression test for a real axis-convention bug: SANPO's camera-axis
+    correction matrix was mapping the camera's own right side to a
+    NEGATIVE (left, "9 o'clock") body-frame bearing -- found once the
+    dashboard made bearing/clock-face directions actually observable end
+    to end (a parked van clearly on the camera's right was reported as
+    left). See `_R_SANPO_LOCAL_FROM_OPENCV`'s own comment in
+    sanpo_loader.py for how this was isolated and fixed (a pure sign flip
+    of the right-mapping row, forward/up untouched).
+
+    Checked on a single frame first; that was flaky (a camera-relative
+    offset isn't the same thing as a body/walking-direction-relative one
+    whenever the head is turned mid-stride, same real-world noise source
+    the heading test above already has to tolerate), so -- like that
+    test -- this aggregates over many frames instead of trusting one. A
+    synthetic point placed in front of and to the camera's own right
+    (OpenCV convention: +X right, +Z forward) should land on the right
+    (positive bearing) on a clear majority of frames; measured directly:
+    72.9% with the fix applied vs. 27.1% with the pre-fix matrix on this
+    same session (near-perfect mirror images of each other, confirming
+    this is a sign flip, not just noise)."""
+    from locus.data.sanpo_loader import load_sequence
+    from locus.geometry.frames import bearing_rad, ego_to_world, world_to_body
+    from locus.geometry.kinematics import finite_difference_velocity
+
+    session_id = config["sanpo_sequences"][0]
+    seq = load_sequence(session_id, config=config)
+    frames = list(seq.iter_frames(max_frames=60))
+
+    positive = 0
+    total = 0
+    for f_prev, f_cur in zip(frames, frames[1:]):
+        dt = f_cur.pose.timestamp - f_prev.pose.timestamp
+        if dt <= 0:
+            continue
+        velocity = finite_difference_velocity(f_prev.pose.t_world_cam, f_cur.pose.t_world_cam, dt)
+        p_cam_right = np.array([2.0, 0.0, 5.0])  # 5m ahead, 2m to the camera's own right
+        p_world = ego_to_world(p_cam_right, f_cur.pose)
+        p_body = world_to_body(p_world, f_cur.pose.t_world_cam, velocity)
+        positive += bearing_rad(p_body) > 0
+        total += 1
+
+    assert total > 20, "too few comparable frames to mean anything"
+    fraction_right = positive / total
+    assert fraction_right > 0.6, (
+        f"a camera-right point should land on the right on a clear majority of frames "
+        f"(got {fraction_right:.0%}) -- if this regresses toward ~0.27, check "
+        f"_R_SANPO_LOCAL_FROM_OPENCV's sign in sanpo_loader.py first"
+    )
+
+
 def test_prefetch_populates_cache_so_iter_frames_does_no_network_io():
     """prefetch() exists specifically because sequential per-frame downloads
     were the actual bottleneck processing a full real session (minutes of

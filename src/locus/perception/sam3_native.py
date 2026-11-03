@@ -21,6 +21,7 @@ worth knowing before reading this as "the same shape as the mock."
 
 from __future__ import annotations
 
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -142,6 +143,38 @@ class Sam31NativeSegmenter:
         if self._predictor is None or self._frame_dir is None:
             raise RuntimeError("add_concept_at() requires prepare() to have run first")
         return self._run_concept_session(concept, start_frame_idx=start_frame_idx)
+
+    def ground_text(self, concept: str, frame: Frame) -> tuple[float, float, float, float] | None:
+        """One-shot text->box grounding on a single frame -- no propagation,
+        no dependency on prepare()'s multi-frame directory. This is the
+        "ground once" half of the real-time split discussed for glasses
+        hardware: EdgeTamSegmenter uses this as its default grounder,
+        trading SAM 3.1's whole-clip batch cost for a single cheap add_prompt
+        call per concept, then hands off to EdgeTAM for genuinely causal,
+        per-frame tracking. Returns None if SAM 3.1 finds nothing here --
+        same "proposed but not actually present" case add_concept_at()
+        already has to handle.
+        """
+        predictor = self._build_predictor()
+        with tempfile.TemporaryDirectory(prefix="sam31_ground_") as tmp:
+            bgr = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(str(Path(tmp) / "00000.jpg"), bgr)
+            session_id = self._start_session(predictor, tmp)
+            try:
+                result = predictor.handle_request(
+                    {
+                        "type": "add_prompt",
+                        "session_id": session_id,
+                        "frame_index": 0,
+                        "text": concept,
+                    }
+                )
+                boxes = np.asarray(result["outputs"]["out_boxes_xywh"])
+                if len(boxes) == 0:
+                    return None
+                return tuple(float(v) for v in boxes[0])
+            finally:
+                predictor.handle_request({"type": "close_session", "session_id": session_id})
 
     def _run_concept_session(self, concept: str, start_frame_idx: int) -> bool:
         session_id = self._start_session(self._predictor, str(self._frame_dir))

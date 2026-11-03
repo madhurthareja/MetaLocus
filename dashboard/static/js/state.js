@@ -18,7 +18,11 @@ export const state = {
   timeline: [],
   idx: 0,
   playing: false,
-  speed: 1,
+  // Default to half real-time: the real device audience for this system
+  // (a visually impaired walker) hears directives, doesn't read a data
+  // feed, and full walking-pace playback compresses real-world gaps
+  // between cues tighter than a first-time viewer can actually follow.
+  speed: 0.5,
   showMasks: true,
   selectedNodeId: null,
   hoveredNodeId: null,

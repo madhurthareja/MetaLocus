@@ -46,11 +46,22 @@ def _compress(response):
 
 
 def _sessions() -> list[str]:
+    """Most-recently-generated session first -- main.js's own default-session
+    pick (`sessions.find(s => s.startsWith('sanpo_')) || sessions[0]`) relies
+    on this ordering. Plain alphabetical sort here meant a session whose name
+    happened to sort early (e.g. a leading '-') kept winning the default
+    forever, even after a newer session with real features (EdgeTAM, warm
+    narration, directive pacing) was regenerated -- confirmed as the actual
+    cause of "I can't see/hear the narrated voice" in the running app: the
+    narrated session existed and worked, it just wasn't what loaded by
+    default."""
     if not DATA_DIR.exists():
         return []
-    return sorted(
-        p.name for p in DATA_DIR.iterdir() if p.is_dir() and (p / "timeline.json").exists()
-    )
+    sessions = [
+        p for p in DATA_DIR.iterdir() if p.is_dir() and (p / "timeline.json").exists()
+    ]
+    sessions.sort(key=lambda p: (p / "timeline.json").stat().st_mtime, reverse=True)
+    return [p.name for p in sessions]
 
 
 @app.route("/")
