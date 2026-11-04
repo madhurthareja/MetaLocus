@@ -1,17 +1,14 @@
 """Text-to-speech for spoken directives, via Meta's SeamlessM4T v2.
 
 Not Voicebox/Audiobox: Meta never publicly released those generation
-models (withheld over misuse concerns; the only open "Audiobox" artifact
-on Hugging Face, `facebook/audiobox-aesthetics`, is an audio *quality
-scorer*, not a speech generator). SeamlessM4T v2 is the real, openly
-downloadable Meta model that actually does text-to-speech, with an
-official `transformers` integration -- lower integration risk than a
-bespoke pip package or an Ollama GGUF repackaging (both were tried and
-didn't pan out: Ollama's completion API has no vocoder step for a TTS
-model's audio-codec-token output).
+models (the only open "Audiobox" artifact on Hugging Face,
+`facebook/audiobox-aesthetics`, is an audio quality scorer, not a speech
+generator). SeamlessM4T v2 is the openly downloadable Meta model that
+actually does text-to-speech, with an official `transformers`
+integration.
 
 Lazy-loaded like Sam31NativeSegmenter: constructing this class doesn't
-touch the GPU or the ~9GB checkpoint until the first `synthesize()` call.
+touch the GPU or the checkpoint until the first `synthesize()` call.
 """
 
 from __future__ import annotations

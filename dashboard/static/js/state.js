@@ -39,18 +39,37 @@ export function currentFrame() {
   return state.timeline[state.idx] || null;
 }
 
+// Severity and urgency come from the pipeline (edge.severity, written by
+// generate_dashboard_data.py via locus.actuation.directives.severity, which
+// also applies the closest-approach gate: a closing object that will pass
+// well clear is "advisory", not a hazard). Sessions generated before that
+// field existed fall back to the TTC-only rule.
+const PIPELINE_SEVERITY = { critical: 'critical', approaching: 'hazard', advisory: 'advisory' };
+const SEVERITY_ORDER = { safe: -1, advisory: 0, hazard: 1, critical: 2 };
+
 export function hazardSeverity(edge) {
-  if (!edge || edge.ttc_s == null) return edge ? 'advisory' : 'safe';
+  if (!edge) return 'safe';
+  if (edge.severity) return PIPELINE_SEVERITY[edge.severity];
+  if (edge.ttc_s == null) return 'advisory';
   if (edge.ttc_s < CRITICAL_TTC_S) return 'critical';
   if (edge.ttc_s < HAZARD_TTC_S) return 'hazard';
   return 'advisory';
 }
 
+// Same rule as locus.actuation.speech_policy.most_urgent_edge: highest
+// severity first; among closing edges the soonest, among advisory ones the
+// nearest.
 export function mostUrgentEdge(edges) {
   if (!edges || !edges.length) return null;
-  const withTtc = edges.filter((e) => e.ttc_s != null);
-  if (withTtc.length) return withTtc.reduce((a, b) => (a.ttc_s < b.ttc_s ? a : b));
-  return edges.reduce((a, b) => (a.range_m < b.range_m ? a : b));
+  const key = (e) => {
+    const sev = hazardSeverity(e);
+    return [-SEVERITY_ORDER[sev], sev === 'advisory' ? Infinity : e.ttc_s, e.range_m];
+  };
+  return edges.reduce((a, b) => {
+    const ka = key(a), kb = key(b);
+    for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] < kb[i] ? a : b;
+    return a;
+  });
 }
 
 export function clockHour(bearingDeg) {
@@ -112,6 +131,16 @@ export function play() {
   state.playing = true;
   state._lastTick = null;
   emit('playback-changed', { playing: true });
+  // playLoop only emits frame-changed when idx actually advances, so the
+  // frame already on screen when Play is pressed (frame 0 on a fresh
+  // session, almost always) would otherwise never be (re-)announced --
+  // the one time it was, from loadSession()'s own load-time emit, is
+  // deliberately not treated as audio-eligible (see the session-loaded
+  // handler below), since that fires before any user gesture. This one
+  // does: it's the direct result of the Play click, so it's exactly the
+  // moment a directive sitting on the current frame should become
+  // audible, not one to suppress.
+  emit('frame-changed', { idx: state.idx, frame: currentFrame() });
   requestAnimationFrame(playLoop);
 }
 
@@ -195,7 +224,7 @@ export function allHazardEvents() {
 const _directiveAudio = typeof Audio !== 'undefined' ? new Audio() : null;
 let _lastPlayedAudioKey = null;
 let _playingSeverity = null; // severity tier of the clip currently in _directiveAudio
-let _audioArmed = false; // skip the frame-changed that loadSession() itself fires -- no autoplay-on-load surprise
+let _audioArmed = false; // disarmed only for the single synchronous frame-changed loadSession() itself fires
 
 const SEVERITY_RANK = { advisory: 0, hazard: 1, critical: 2 };
 
@@ -208,14 +237,34 @@ export function setAudioMuted(muted) {
 on('session-loaded', () => {
   _lastPlayedAudioKey = null;
   _playingSeverity = null;
+  // Disarmed only long enough to skip loadSession()'s own synchronous
+  // frame-changed (so picking a session doesn't autoplay its clip before
+  // Play is pressed) -- not "whichever frame-changed happens to arrive
+  // first". That used to be the same thing, because this one fires
+  // synchronously right after session-loaded and nothing else could beat
+  // it to the listener. But most sessions' very first spoken cue lands
+  // at t=0 (the directive pipeline evaluates frame 0 same as any other),
+  // so the old "arm on first use" logic was silently discarding frame 0's
+  // audio on every fresh load/play, forever -- the first thing the viewer
+  // actually heard was already the SECOND cue, several seconds into a
+  // video whose on-screen content (and the HUD/timeline reading it) was
+  // otherwise exactly in sync. That one-cue lag is what read as "audio
+  // and video are not synchronised." A microtask re-arms before control
+  // returns to the event loop -- i.e. before Play, a scrub, or the
+  // animation-frame loop can possibly produce the next real event -- so
+  // exactly the one synchronous call gets skipped, never a real one.
   _audioArmed = false;
+  queueMicrotask(() => { _audioArmed = true; });
 });
 
 on('frame-changed', ({ frame }) => {
-  if (!_audioArmed) { _audioArmed = true; return; }
+  if (!_audioArmed) return;
   if (!_directiveAudio || !frame) return;
-  const edge = mostUrgentEdge(frame.edges);
-  if (!edge || !edge.audio) return;
+  // Only the edge the pipeline elected to speak carries a clip (see
+  // locus.actuation.speech_policy) -- play that one, not whatever is most
+  // urgent on screen, which may be something already announced.
+  const edge = frame.edges.find((e) => e.audio);
+  if (!edge) return;
   const key = `${state.session}:${edge.audio}`;
   if (key === _lastPlayedAudioKey) return; // same directive still active -- don't restart it every frame
 

@@ -1,26 +1,14 @@
 """Spark-narrated hazard directives -- the warm, "friend walking with you"
-voice for anything that ISN'T a split-second emergency.
+voice for anything that isn't a split-second emergency.
 
-Real constraint this respects: a seconds-away hazard needs a short, fast
-spoken warning with zero network round-trip in the loop --
-`directives.describe()` handles that tier unconditionally (deterministic,
-local, no API call), and is also this module's own fallback if a call here
-fails. Everything else -- an object a few seconds out, or just nearby and
-not closing -- has real margin, so spending one Meta Model API call
-(muse-spark-1.3, the same model and endpoint `spark_proposer.py` already
-uses for concept proposal) to turn the geometric facts into a natural
-sentence instead of a robotic "concept at clock" readout costs nothing
-safety-wise: `generate_dashboard_data.py` is a batch script, not a live
-loop, so this call's latency only affects how long *generation* takes,
-never the resulting spoken clip's playback duration.
-
-Checked the Meta Model API is actually the right place for this before
-writing it: Muse Glimmer -- the model `docs/PROJECT_PLAN.md` originally
-scoped for this always-on narration role -- is explicitly self-host-only
-(confirmed against https://dev.meta.ai/docs/models: its API column reads
-"None (self-host)", and it's absent from `GET /v1/models`'s hosted list).
-Muse Spark is hosted and already proven in this codebase, so it's the
-real substitute, not Glimmer.
+A seconds-away hazard needs a short, fast, local spoken warning with no
+network round trip -- `directives.describe()` handles that tier
+unconditionally, and is also this module's fallback if a call here
+fails. Everything else has real margin, so one Meta Model API call
+(muse-spark-1.3) turns the geometric facts into a natural sentence
+instead of a "concept at clock" readout; since generation is a batch
+script rather than a live loop, this call's latency only affects
+generation time, never the resulting clip's playback duration.
 """
 
 from __future__ import annotations
@@ -29,11 +17,14 @@ import os
 
 from pydantic import BaseModel
 
-from locus.actuation.directives import clock_hour, describe
+from locus.actuation.directives import clock_hour, describe, on_collision_course
 from locus.types import Edge
 
 META_API_BASE_URL = "https://api.meta.ai/v1"
 MODEL_ID = "muse-spark-1.3"
+# Below this, an object reads as stationary -- mover velocity is a line fit
+# over noisy lifted positions (see SpatialMemoryGraph), not exact.
+MOVING_SPEED_MPS = 0.5
 
 
 class _Narration(BaseModel):
@@ -59,19 +50,25 @@ class SparkNarrator:
             self._client = OpenAI(base_url=META_API_BASE_URL, api_key=key)
         return self._client
 
-    def narrate(self, concept: str, edge: Edge) -> str:
+    def narrate(self, concept: str, edge: Edge, object_speed_mps: float | None = None) -> str:
         """One natural sentence describing `edge`, in a companion's voice.
         Falls back to the fast templated describe() on any API failure --
         a busy walk shouldn't go silent because of a network hiccup."""
         try:
             client = self._client_lazy()
             clock = clock_hour(edge.bearing_rad)
-            closing = edge.ttc_s is not None
-            facts = (
-                f"a {concept} is about {edge.range_m:.0f} meters away at the "
-                f"{clock} o'clock position"
-                + (f", slowly closing, roughly {edge.ttc_s:.0f} seconds out" if closing else ", not approaching")
-            )
+            # State what's actually known about motion rather than leaving
+            # the model to guess and fill in something plausible but wrong
+            # (or an implied "you're safe" this system has no basis for).
+            if on_collision_course(edge):
+                motion = f", slowly closing, roughly {edge.ttc_s:.0f} seconds out"
+            elif object_speed_mps is not None and object_speed_mps >= MOVING_SPEED_MPS:
+                motion = ", moving"
+            elif object_speed_mps is not None:
+                motion = ", not moving"
+            else:
+                motion = ""  # speed not measured yet -- say nothing rather than guess
+            facts = f"a {concept} is about {edge.range_m:.0f} meters away at the {clock} o'clock position" + motion
             response = client.beta.chat.completions.parse(
                 model=MODEL_ID,
                 messages=[
@@ -84,7 +81,11 @@ class SparkNarrator:
                             "natural spoken sentence (under 12 words) a real friend would "
                             "actually say out loud. Always mention the clock-face direction "
                             "and the object by name. Skip exact numbers (meters, seconds) "
-                            "unless they're truly necessary. Calm, warm, conversational tone."
+                            "unless they're truly necessary. Calm, warm, conversational tone. "
+                            "Never say or imply that they are safe, that the way is clear, or "
+                            "that there's nothing to worry about -- you can only see some "
+                            "objects, not curbs, holes or everything else, so describe what "
+                            "is there and leave the judgment to them."
                         ),
                     },
                     {"role": "user", "content": f"Narrate this for them: {facts}"},

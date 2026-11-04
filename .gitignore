@@ -5,3 +5,20 @@ __pycache__/
 scripts/*_log.txt
 vendor/
 .venv/
+
+# Build artifacts
+*.egg-info/
+.pytest_cache/
+
+# Runtime logs
+logs/
+
+# Generated demo-session data (frames/masks/audio/video/timeline for a real
+# run) regenerates from scripts/generate_dashboard_data.py and isn't source;
+# the small aggregate result files (ablation_results.json, system_facts.json,
+# etc.) and the synthetic/ground-truth sessions stay tracked.
+dashboard/data/sanpo_*/
+dashboard/data/aea_*/
+
+# Ad-hoc archived sessions kept locally for before/after reference, not history
+archive/

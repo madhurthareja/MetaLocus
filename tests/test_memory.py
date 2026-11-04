@@ -294,3 +294,128 @@ def test_mask_lifting_beats_box_lifting_on_synthetic_occlusion():
         errors["box"].append(abs(box_inst.p_cam[2] - true_depth))
 
     assert sum(errors["mask"]) <= sum(errors["box"])
+
+
+def _observe_track(graph, concept, positions, dt=1 / 15, instance_id=1):
+    for i, p in enumerate(positions):
+        graph.observe(
+            [Instance3D(concept=concept, instance_id=instance_id, p_cam=np.zeros(3),
+                        p_world=np.asarray(p, dtype=float), extent=np.zeros(3), score=1.0)],
+            None, t=float(i) * dt,
+        )
+        graph.step(float(i) * dt)
+    return next(iter(graph.nodes.values()))
+
+
+def test_static_concept_velocity_is_pinned_to_zero_under_jitter():
+    """Static things don't move: measured lifting noise on real SANPO static
+    nodes (median 0.14m, p90 0.70m per frame) made smoothed velocity ~1-13
+    m/s and drove ~94% of critical alerts. Pinning, not filtering."""
+    rng = np.random.default_rng(1)
+    positions = [np.array([3.0, 0.0, 4.0]) + rng.normal(scale=0.4, size=3) for _ in range(20)]
+    node = _observe_track(SpatialMemoryGraph(), "street lamp", positions)
+    assert np.all(node.velocity_world == 0.0)
+
+
+def test_mover_velocity_does_not_survive_an_identity_jump():
+    """The real SANPO failure: the segmenter re-attaches an instance id to
+    a different object (a distant, moving truck's id landing on a parked one
+    at 6m). The old object's velocity must not carry over to the new one --
+    that inherited speed was behind every false critical mover alert there."""
+    dt = 1 / 15
+    moving = [np.array([0.0, 0.0, 30.0 - 8.0 * i * dt]) for i in range(20)]
+    parked = [np.array([2.0, 0.0, 6.0])] * 12
+    graph = SpatialMemoryGraph()
+    node = _observe_track(graph, "truck", moving)
+    assert np.linalg.norm(node.velocity_world) == pytest.approx(8.0, rel=0.05)
+
+    for i, p in enumerate(parked, start=len(moving)):
+        graph.observe([Instance3D(concept="truck", instance_id=1, p_cam=np.zeros(3), p_world=p,
+                                  extent=np.zeros(3), score=1.0)], None, t=i * dt)
+        if i == len(moving):
+            assert np.linalg.norm(node.velocity_world) == 0.0, "the jump starts a new track with no speed"
+    assert node.p_world == pytest.approx(parked[-1])
+    assert np.linalg.norm(node.velocity_world) < 0.1, "the parked truck's own track says it isn't moving"
+
+
+def test_mover_velocity_fit_recovers_speed_through_depth_jitter():
+    dt = 1 / 15
+    rng = np.random.default_rng(0)
+    positions = [np.array([0.0, 0.0, 20.0 - 5.0 * i * dt]) + rng.normal(0, 0.15, 3) for i in range(30)]
+    graph = SpatialMemoryGraph()
+    _observe_track(graph, "car", positions[:5])
+    assert np.linalg.norm(graph.nodes[1].velocity_world) == 0.0, "no speed until the track spans enough time"
+    node = _observe_track(graph, "car", positions)
+    assert node.velocity_world[2] == pytest.approx(-5.0, rel=0.15)
+
+
+def test_mover_flipping_between_two_objects_never_gets_a_speed():
+    """One id alternating between two objects 15m apart every frame (seen on
+    real SANPO frames 90-93) is all jumps -- it must read as no motion,
+    not as a vehicle doing 200 m/s or anything averaged from that."""
+    positions = [np.array([0.0, 0.0, 6.0 if i % 2 else 21.0]) for i in range(30)]
+    node = _observe_track(SpatialMemoryGraph(), "truck", positions)
+    assert np.linalg.norm(node.velocity_world) == 0.0
+
+
+def test_unknown_concept_keeps_class_agnostic_velocity():
+    dt = 1 / 15
+    positions = [np.array([0.0, 0.0, 10.0 - 30.0 * i * dt]) for i in range(15)]
+    node = _observe_track(SpatialMemoryGraph(), "puddle", positions)
+    assert np.linalg.norm(node.velocity_world) > 20.0, "no class prior -> no speed ceiling"
+
+
+def test_stale_movable_node_gets_no_edge_but_static_node_does():
+    """A remembered car is a guess that gets worse every frame; a remembered
+    pole is exactly right. Both stay in memory, only the pole keeps an edge."""
+    graph = SpatialMemoryGraph(edge_radius_m=20.0)
+    for concept, iid, p in (("car", 1, [2.0, 0.0, 6.0]), ("pole", 2, [-1.0, 0.0, 4.0])):
+        graph.observe([Instance3D(concept=concept, instance_id=iid, p_cam=np.zeros(3),
+                                  p_world=np.array(p), extent=np.zeros(3), score=1.0)], None, t=0.0)
+    wearer, walking = np.zeros(3), np.array([0.0, 0.0, 1.2])
+
+    graph.step(0.5)
+    assert {graph.nodes[e.dst_node_id].concept for e in graph.edges(wearer, walking, t=0.5)} == {"car", "pole"}
+
+    graph.step(1.5)
+    assert {graph.nodes[e.dst_node_id].concept for e in graph.edges(wearer, walking, t=1.5)} == {"pole"}
+    assert {n.concept for n in graph.nodes.values()} == {"car", "pole"}, "stale mover is still remembered"
+    assert {graph.nodes[e.dst_node_id].concept for e in graph.edges(wearer, walking)} == {"car", "pole"}, (
+        "without t, no staleness filter (old call sites unchanged)"
+    )
+
+
+def test_movable_node_decays_and_evicts_faster_than_static():
+    graph = SpatialMemoryGraph(node_decay_half_life_seconds=8.0, node_eviction_seconds=20.0)
+    for concept, iid, p in (("truck", 1, [2.0, 0.0, 6.0]), ("tree", 2, [-1.0, 0.0, 4.0])):
+        graph.observe([Instance3D(concept=concept, instance_id=iid, p_cam=np.zeros(3),
+                                  p_world=np.array(p), extent=np.zeros(3), score=1.0)], None, t=0.0)
+    graph.step(2.0)
+    by_concept = {n.concept: n for n in graph.nodes.values()}
+    assert by_concept["truck"].confidence < 0.3 < 0.8 < by_concept["tree"].confidence
+    graph.step(5.0)
+    assert {n.concept for n in graph.nodes.values()} == {"tree"}
+
+
+def test_closest_approach_separates_passing_beside_from_head_on():
+    from locus.memory.edges import closest_approach
+
+    walking = np.array([0.0, 0.0, -1.4])  # object's velocity relative to a wearer walking +Z at 1.4 m/s
+    cpa, tcpa = closest_approach(np.array([1.0, 0.0, 3.0]), walking)
+    assert cpa == pytest.approx(1.0) and tcpa == pytest.approx(3.0 / 1.4)
+    cpa, _ = closest_approach(np.array([0.0, 0.0, 3.0]), walking)
+    assert cpa == pytest.approx(0.0)
+    cpa, tcpa = closest_approach(np.array([1.0, 0.0, -3.0]), walking)  # already behind
+    assert cpa == pytest.approx(np.hypot(1.0, 3.0)) and tcpa is None
+
+
+def test_mover_velocity_reports_unmeasured_until_the_track_is_long_enough():
+    dt = 1 / 15
+    graph = SpatialMemoryGraph()
+    positions = [np.array([0.0, 0.0, 15.0 - 1.0 * i * dt]) for i in range(12)]
+    _observe_track(graph, "bicycle", positions[:3])
+    assert not graph.velocity_measured(1), "zero here means unknown, not stopped"
+    _observe_track(graph, "bicycle", positions)
+    assert graph.velocity_measured(1)
+    _observe_track(graph, "street lamp", [np.zeros(3)], instance_id=2)
+    assert graph.velocity_measured(2), "a static concept's zero is a measurement"

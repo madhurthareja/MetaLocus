@@ -117,6 +117,8 @@ function wireHeader() {
   syncAudioToggle();
 }
 
+const DEFAULT_SESSION = 'sanpo_scaffolding_sidewalk_to_crossing';
+
 async function boot() {
   buildShell();
   wireNav();
@@ -130,7 +132,9 @@ async function boot() {
     document.getElementById('hdr-session-status').textContent = 'no sessions found';
     return;
   }
-  const preferred = sessions.find((s) => s.startsWith('sanpo_')) || sessions[0];
+  const preferred = sessions.includes(DEFAULT_SESSION)
+    ? DEFAULT_SESSION
+    : sessions.find((s) => s.startsWith('sanpo_') && !s.endsWith('_before_fixes')) || sessions[0];
   await loadSession(preferred);
 }
 

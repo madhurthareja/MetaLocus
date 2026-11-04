@@ -673,7 +673,12 @@ State 1: No immediate hazard.
 
 Display:
 
-PATH CLEAR
+NO ALERTS
+
+(Changed from "PATH CLEAR", 2026-11-03: the system can only report that
+nothing among the concepts it tracks is a hazard, not that the path is
+safe -- curbs, holes and untracked objects are invisible to it. A false
+"clear" is the one error class that can actually hurt someone.)
 
 Use a minimal visual indicator.
 
@@ -689,7 +694,10 @@ State 3: Critical warning.
 
 Display:
 
-STOP
+VAN · RIGHT
+
+(Changed from "STOP", 2026-11-03: describe, don't instruct. The wearer
+knows their route and how to move; the HUD names the object and its side.)
 
 Use the appropriate critical warning treatment.
 

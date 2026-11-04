@@ -99,3 +99,60 @@ def test_time_to_collision_matches_analytic_crossing_hazard():
 def test_time_to_collision_is_none_when_receding():
     assert time_to_collision(range_m=10.0, closing_speed_mps=0.0) is None
     assert time_to_collision(range_m=10.0, closing_speed_mps=-1.0) is None
+
+
+def test_body_frame_handedness_in_a_z_up_world():
+    """SANPO and AEA are Z-up, unlike synthetic's OpenCV-axis (Y-down)
+    world. Walking along world +Y in a right-handed Z-up world, world +X is
+    on the wearer's right -- the same physical fact the synthetic world
+    encodes as +X right of +Z travel. Passing the wrong gravity axis here
+    is exactly what made SANPO's left/right a coin flip."""
+    from locus.geometry.frames import bearing_rad
+
+    z_down = np.array([0.0, 0.0, -1.0])
+    walking = np.array([0.0, 1.4, 0.0])
+    right_of_path = world_to_body(np.array([2.0, 5.0, 0.0]), np.zeros(3), walking, z_down)
+    left_of_path = world_to_body(np.array([-2.0, 5.0, 0.0]), np.zeros(3), walking, z_down)
+    overhead = world_to_body(np.array([0.0, 5.0, 2.0]), np.zeros(3), walking, z_down)
+
+    assert bearing_rad(right_of_path) > 0
+    assert bearing_rad(left_of_path) < 0
+    due_right = world_to_body(np.array([3.0, 0.0, 0.0]), np.zeros(3), walking, z_down)
+    assert bearing_clockface(due_right) == pytest.approx(3.0)
+    assert bearing_rad(overhead) == pytest.approx(0.0, abs=1e-9), "height must not leak into left/right"
+    assert overhead[1] < 0, "body +Y is down, so something overhead has negative body Y"
+
+
+def test_body_frame_stays_finite_when_standing_still():
+    z_down = np.array([0.0, 0.0, -1.0])
+    p_body = world_to_body(np.array([1.0, 2.0, 0.0]), np.zeros(3), np.zeros(3), z_down)
+    assert np.all(np.isfinite(p_body))
+
+
+def test_wearer_motion_holds_heading_through_a_stop_and_ignores_repeated_poses():
+    """Real SANPO pose streams repeat a pose on NOT_READY frames and stop
+    walking for long stretches; neither may zero out the heading."""
+    from locus.geometry.kinematics import WearerMotion
+
+    motion = WearerMotion(world_down=np.array([0.0, 0.0, -1.0]))
+    dt, pos = 1 / 15, np.zeros(3)
+    for i in range(30):  # walk +Y at 1.2 m/s, every third pose a stale repeat
+        if i % 3 != 2:
+            pos = np.array([0.0, 1.2 * i * dt, 0.02 * np.sin(i)])  # small vertical gait bob
+        velocity, heading = motion.update(i * dt, pos)
+    assert np.linalg.norm(velocity) == pytest.approx(1.2, rel=0.15)
+    assert heading == pytest.approx(np.array([0.0, 1.0, 0.0]), abs=0.05)
+    assert abs(velocity[2]) < 1e-9, "velocity is horizontal only"
+
+    for i in range(30, 60):  # standing still
+        velocity, heading = motion.update(i * dt, pos)
+    assert np.linalg.norm(velocity) == 0.0
+    assert heading == pytest.approx(np.array([0.0, 1.0, 0.0]), abs=0.05)
+
+
+def test_wearer_motion_uses_camera_forward_before_first_step():
+    from locus.geometry.kinematics import WearerMotion
+
+    motion = WearerMotion(world_down=np.array([0.0, 0.0, -1.0]))
+    _, heading = motion.update(0.0, np.zeros(3), camera_forward_world=np.array([1.0, 0.0, -0.5]))
+    assert heading == pytest.approx(np.array([1.0, 0.0, 0.0]))

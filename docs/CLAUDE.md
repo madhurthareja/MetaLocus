@@ -221,26 +221,131 @@ Real and verified since the above was first written:
     periodic box re-anchor is a cheaper correction than full
     forward+reverse occlusion reassociation), but a large, real
     improvement over uncorrected causal drift.
-- **Spoken-directive pacing** (`generate_dashboard_data.py`,
-  `DIRECTIVE_COOLDOWN_S`/`CRITICAL_COOLDOWN_S`): found and fixed a real
-  UX problem, not a technical bug -- a directive+audio clip was being
-  attached to *every* tracked hazard edge on *every* frame, so a brand-new
-  clip would fire the instant the previous one finished playing the moment
-  phrasing shifted by even one clock-position bucket. A blind listener
-  hears this in real time, not as a data table; constant back-to-back
-  audio with no gap to process it is unusable even when each individual
-  cue is accurate. Now at most one edge (the single most urgent -- same
-  selection rule the dashboard already used client-side, moved here so the
-  real pipeline and the UI agree) is elected to speak per frame, gated by
-  a cooldown since the last spoken cue (3.0s normal, 1.2s if still
-  critical) -- except a genuine escalation into critical range, which
-  always cuts in immediately regardless of cooldown. Measured effect on
-  the same real 539-frame run: 252 unique spoken clips -> 23. Dashboard
-  default playback speed also dropped from 1x to 0.5x
+- **Spoken-directive pacing** (`locus/actuation/speech_policy.py`, used by
+  `generate_dashboard_data.py`): found and fixed a real UX problem, not a
+  technical bug -- a directive+audio clip was being attached to *every*
+  tracked hazard edge on *every* frame, so a brand-new clip would fire the
+  instant the previous one finished playing the moment phrasing shifted by
+  even one clock-position bucket. A blind listener hears this in real
+  time, not as a data table; constant back-to-back audio with no gap to
+  process it is unusable even when each individual cue is accurate. Now at
+  most one edge is elected to speak per frame, gated by a cooldown since
+  the last spoken cue (3.0s normal, 1.2s if still critical) -- except a
+  genuine escalation into critical range, which always cuts in
+  immediately. Measured effect on the same real 539-frame run: 252 unique
+  spoken clips -> 23. **Then (2026-11-03) a novelty rule**: an object is
+  announced once, and again only when something about it changes (severity
+  goes up, or it moves 2+ clock hours while ahead -- not the ordinary drift
+  of walking past it); routine mentions skip things behind the wearer. On
+  the same session, replayed: 25 spoken cues -> 12. **Then (2026-11-04) a
+  timeliness rule**: objects entering range together queued behind the 3s
+  cooldown, so routine mentions arrived a median ~6s (up to ~24s) after the
+  object appeared -- heard as "the voice is late". Routine mentions now
+  only start within 10m (`ADVISORY_RANGE_M`), and one that can't be spoken
+  within 2s of becoming news (`ADVISORY_MAX_WAIT_S`) is dropped rather than
+  spoken late. Warnings (approaching/critical) are never dropped. Playback
+  itself was measured at 44-93ms from trigger to audible. Dashboard default
+  playback speed also dropped from 1x to 0.5x
   (`dashboard/static/js/state.js`) -- the real audience hears this in real
   time rather than reading a feed, and full walking-pace playback
   compresses real-world gaps between cues tighter than a first-time
   listener can actually follow.
+- **False hazard alerts were ~94% velocity noise (fixed 2026-11-03).** On
+  the shipped SANPO run, 342 of 539 frames carried a critical (TTC < 2s)
+  alert. Three causes, three fixes, each measured on that session:
+  1. Static objects picked up 1-13 m/s of "velocity" from per-frame
+     lifting jitter, frozen in place once unobserved.
+     `memory/motion_classes.py` sorts concepts into static (pole, tree,
+     hydrant, ... -- velocity pinned to 0), movable (person, car, ... --
+     per-class speed ceiling, 1s decay half-life, 4s eviction, no edge once
+     unseen for 0.75s) and unknown (unchanged behaviour). 342 -> 43
+     critical frames.
+  2. EdgeTAM regularly hands one instance id a different physical object
+     (one "truck" node re-attached to 19 trucks in 36s, its range
+     alternating 6m/21m on consecutive frames), and the old velocity rode
+     along onto the new object. A step faster than the class can move now
+     starts a new track segment at zero velocity, and mover velocity is a
+     least-squares fit over the current segment (<=1s, needs >=5
+     observations spanning >=0.4s). 43 -> 21.
+  3. What remained was walking *past* things -- poles a metre to the
+     side, closing fast but never reached. Edges now carry the horizontal
+     closest point of approach (`cpa_m`); a closing object only counts as
+     a hazard if it will come within `CPA_GATE_M` = 0.75m
+     (`actuation/directives.py`: ~0.3m shoulder half-width + ~0.45m for
+     heading error). Every remaining pole alert had a 1.0m miss distance.
+     21 -> 2 critical frames. Those objects are still mentioned, just not
+     as hazards. Honest caveat: a gate this close to the measured 1.0m
+     means the choice of 0.75 vs 1.0 matters, and position error near the
+     gate can still flip one.
+  4. The last two were parked vehicles beside the sidewalk whose lifted
+     position slid ~1 m/s toward the wearer for exactly one frame as they
+     were walked past (checked against the video). Any rise in severity
+     (to approaching or critical) now has to hold for 3 frames
+     (`ESCALATION_CONFIRM_S`, `speech_policy.py`) before it is spoken or
+     shown; escalations then cut through the cooldown. Holding only
+     critical wasn't enough -- the blips came back as "approaching". Costs
+     ~0.13s on a true warning.
+- **"0 false critical alerts" didn't survive testing on data it wasn't
+  tuned against (2026-11-04).** The above was all measured on one session
+  (`-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG`); running the fixed pipeline on the
+  other two cached real SANPO sessions (`11tnj2tdX...`, heavy vehicular
+  traffic; `2dVxdA...`, moderate traffic/high obstacle density) surfaced
+  two more real false alarms, each a genuinely different mechanism:
+  1. **Unlisted-concept noise (fixed).** Spark proposed "suitcase" for the
+     `2dVxdA` walk. It matched neither word list in `motion_classes.py`,
+     so it kept the pre-fix unconstrained behavior: velocity swung from
+     +8 to -17.9 m/s between consecutive frames, with no suitcase visible
+     in the corresponding camera frame -- the identical "trucks at 112
+     m/s" failure, entering through a concept the hardcoded vocabulary
+     never anticipated (and can't exhaustively, since Spark's vocabulary
+     is open-ended). Fixed by asking Spark itself: any concept not covered
+     by the hardcoded lists is classified once (static/movable + a max
+     speed) via `SparkProposer.classify_motion()`
+     (`generate_dashboard_data.py`'s `classify_unlisted_concepts`), one
+     call per newly-seen unlisted concept, not per frame. Real call
+     returned `suitcase -> movable, 5 m/s`. If the call itself fails, the
+     concept defaults to movable/`DEFAULT_CAUTIOUS_MAX_SPEED_MPS` (3 m/s)
+     rather than staying unprotected. The hardcoded lists always take
+     precedence over a registered classification, so this can only add
+     caution to a concept, never remove it from an already-verified one.
+     Confirmed on the real walk: critical frames 23 -> 19, "suitcase"
+     fully gone from the set of concepts ever flagged, every other
+     concept's counts unchanged (the fix is surgical, not a behavior
+     shift). The raw lifted position for this instance still jumps
+     wildly -- the perception-level instability isn't fixed, only its
+     ability to read as plausible velocity is.
+  2. **Near-field depth drift (open, not fixed).** On the `11tnj2tdX`
+     walk, a parked truck (close-range, large in frame, same tracked id
+     from frame 0, never re-associated) produced a sustained ~1.2s
+     critical episode: range closing 2.7m -> 1.8m while the wearer's own
+     measured displacement over that second was only 0.5m and the wearer
+     was stationary (`|v|=0.00`) for the back half of it. The object's own
+     lifted position drifted ~0.67m toward the wearer in that second --
+     slow and smooth enough to clear both the per-frame outlier-jump gate
+     (tuned for sudden snaps, not a gradual crawl) and the least-squares
+     velocity fit (which can't distinguish real slow motion from
+     correlated noise of the same magnitude). `truck` already has a
+     hardcoded 20 m/s ceiling, so this isn't a vocabulary gap -- it's
+     larger absolute position error for large/close objects, which no
+     ceiling this generous catches. No fix applied: a tighter floor risks
+     suppressing a real, genuinely slow-moving vehicle, and that tradeoff
+     needs real testing, not a last-minute patch. Documented as an open
+     limitation.
+  Net effect: the honest real-data count is not "0 false critical alerts"
+  as a general claim -- it's 0 on the walk the fixes were tuned against,
+  1 fixed and confirmed on a second walk, and 1 known, undocumented-no-
+  longer, unfixed mechanism on a third.
+- **Wording (2026-11-03).** Anything on a collision course (critical or
+  approaching) is spoken in the short `describe()` form with its seconds
+  (~1.6s of speech); the narrated sentence (2.2-2.6s) is kept for routine
+  mentions, because speech duration comes straight out of lead time. The
+  narrator is told the object's measured speed, or nothing if it isn't
+  measured yet (it had called a van driving past at 2.4 m/s "stopped"),
+  and is instructed never to imply safety (it had added "we're all good"
+  and "we're clear" -- the spoken version of "PATH CLEAR").
+  HUD: "NO ALERTS" instead of "PATH CLEAR" (the system can't see curbs,
+  holes or untracked objects, so it can't claim a path is clear), and the
+  object + side instead of "STOP" (describe, don't instruct).
 
 Still not done:
 - **`src/locus/app/pipeline.py`** -- the productionized async version of
@@ -284,42 +389,44 @@ Still not done:
      documented stereo baseline (chest ~120mm, head ~63mm) so a wrong
      mapping raises instead of silently producing right-shaped,
      wrong-valued intrinsics.
-  2. SANPO's quaternion uses a different local "forward" axis than the
-     OpenCV convention (`+Z` forward) that `Intrinsics`/the rest of
-     `locus.geometry` assumes everywhere else, including for AEA. This is
-     invisible to any RGB/depth visual check -- it only shows up when you
-     compare a velocity-derived heading to the camera's own
-     orientation-derived heading. Testing all six signed local axes
-     against the head camera's own smoothed velocity found local `-X`
-     gives a clean, small residual (median ~22 degrees); every other axis
-     gave ~100+ degrees of essentially uncorrelated error. The up/right
-     axes remain a genuinely open question (not just unverified algebra):
-     the dataset's own `..._right_handed_y_up` naming implies translation
-     Y is vertical, but this loader's own `fixed_camera_poses.csv` data
-     says otherwise (Z is the axis that stays bounded across a session
-     tagged elevation-flat; Y is the one that grows by 14m). Diffing
-     `fixed_camera_poses.csv` against the dataset's own *unfixed*
-     `camera_poses.csv` ruled out a simple axis permutation as the
-     explanation -- the two trajectories diverge progressively, meaning
-     "fixed" is a genuinely re-estimated trajectory, not a relabeling.
-     This loader currently assumes up=Z (matching its own data) over
-     up=Y (the literal feature name), but this specifically affects only
-     lateral/vertical placement of lifted 3D points, not depth-along-ray
-     or heading -- which is why the validation below still means what it
-     says despite this being unresolved.
+  2. **Corrected 2026-11-03 -- the original fix here was wrong.** It
+     concluded SANPO's quaternion used local `-X` as forward and applied a
+     correction matrix (`_R_SANPO_LOCAL_FROM_OPENCV`). That matrix had
+     determinant -1 -- a reflection -- and the ~22 degree "median" that
+     supported it was measured as `atan2(x, z)`, i.e. assuming Y-up in a
+     world where the wearer walks along +Y, so it discarded the dominant
+     motion component. The settled answer comes from multi-view depth
+     reprojection (lift one frame's depth into world, reproject into a
+     frame ~0.5s later, compare to that frame's own depth) over all 48
+     signed axis permutations: **the raw quaternion is already
+     OpenCV-camera (+X right, +Y down, +Z forward) in a right-handed Z-up
+     world** -- identity scores 16% median relative depth error, the old
+     matrix 45%, chance ~44%. The loader now applies no correction, and
+     `SanpoSequence.world_down = (0, 0, -1)` (AEA is also Z-up; the
+     synthetic world is OpenCV-axis, +Y down). `world_down` is threaded
+     through `locus.geometry.frames` / `SpatialMemoryGraph`. This also
+     resolves the up/right question previously left open here: Z is up,
+     as the trajectory data said; the `..._y_up` feature name is the
+     misleading part.
 
-  With the forward-axis fix applied, the validation succeeded on the part
-  it can check: the head camera's velocity-derived heading agrees with
-  the chest camera's real measured heading at a median of ~22 degrees
+     User-visible consequence of the old matrix: on the shipped SANPO
+     dashboard run, the reported side of an object matched the side of the
+     image it was on only 55% of the time -- a coin flip. Replayed through
+     the corrected pipeline: 351/351 (100%). Covered by
+     `test_identity_rotation_convention_is_multiview_consistent` and
+     `test_reported_side_matches_image_side`.
+
+  Measured correctly (yaw in the plane perpendicular to real gravity), the
+  head camera's velocity-derived heading agrees with the chest camera's
+  measured heading at a **median of 14.7 degrees** on walking frames
   (larger excursions during turns, where a velocity-smoothed estimate
   legitimately lags real-time orientation). Covered by
   `tests/test_sanpo_loader.py::test_velocity_derived_heading_matches_chest_camera_measured_heading`.
-  This is the first time this project has validated the body-frame
-  approximation against anything other than "it seems reasonable" --
-  worth being honest that it's a median-level agreement with real
-  scatter, not an exact match, and that the up/right axis question would
-  need the dataset maintainers (sanpo_dataset@google.com) or a
-  lateral-position-specific test to fully resolve.
+  The wearer heading itself now comes from `WearerMotion`
+  (`geometry/kinematics.py`): a 1s causal window of horizontal velocity,
+  held through stops (271 of the session's 539 frames have the wearer
+  standing still, where the old per-frame velocity collapsed the body
+  frame), falling back to the camera's own forward before the first step.
 - `requirements.lock.txt` / `docs/environment.md` -- not yet written.
 
 ## External resources (outside this repo, on the shared DGX box)
@@ -358,6 +465,14 @@ Still not done:
    override, not the default). It also re-asks at a few later checkpoints
    through a clip, not just frame 0 -- see the EdgeTAM/dashboard entry
    below for why a one-shot opening-frame proposal isn't enough on its own.
+4. **PROJECT_PLAN.md's "run Meta open weights models" line listing Muse
+   Glimmer 30B as a local model is stale.** Glimmer was the original plan
+   for always-on narration, but its API column at
+   https://dev.meta.ai/docs/models reads "None (self-host)" and it's
+   absent from the hosted model list -- it isn't actually used anywhere
+   in this repo. Muse Spark (`muse-spark-1.3`, hosted, already used for
+   concept proposal) fills that narration role instead (`actuation/
+   narrator.py`). Fix the submission writeup's model list before judging.
 
 ## Conventions
 - Report ablation results (A/B/C/D, especially C vs D) honestly even if a

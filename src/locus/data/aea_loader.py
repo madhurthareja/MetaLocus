@@ -28,16 +28,13 @@ free, and what it doesn't:
   used to occlusion-test against the RGB view directly; the per-pixel
   z-buffer is the practical substitute.
 
-Calibration notes (verified against an actual frame, not assumed): the
-camera-rgb calibration in online_calibration.jsonl is parameterized at a
-2880x2880 native sensor resolution (the json carries no image size field
--- 2880 is Aria Gen1's documented RGB sensor resolution, and rescaling
-from it with DeviceVersion.Gen1 round-trips correctly; DeviceVersion.Gen2
-raises immediately, which further confirms this is a Gen1 recording, as
-the whole AEA dataset is). Online calibration drifts slightly over a
-session (thermal effects); this loader uses the first record in the
-jsonl as a fixed-for-the-sequence approximation rather than the
-time-varying series, which is accurate enough for a short clip.
+Calibration notes: the camera-rgb calibration in online_calibration.jsonl
+is parameterized at a 2880x2880 native sensor resolution (the json
+carries no image size field; 2880 is Aria Gen1's documented RGB sensor
+resolution, and rescaling with DeviceVersion.Gen1 round-trips correctly).
+Online calibration drifts slightly over a session (thermal effects);
+this loader uses the jsonl's first record as a fixed-for-the-sequence
+approximation, accurate enough for a short clip.
 """
 
 from __future__ import annotations
@@ -188,6 +185,8 @@ class AeaSequence:
     _T_device_camera: np.ndarray  # (4, 4)
     _src_calib: object  # rescaled fisheye calibration, for distort_by_calibration
     _dst_calib: object  # virtual pinhole calibration matching self.intrinsics
+    # Aria's odometry world is Z-up. See locus.geometry.frames.
+    world_down: tuple[float, float, float] = (0.0, 0.0, -1.0)
 
     def _nearest_pose(self, t: float):
         idx = int(np.searchsorted(self._pose_timestamps_s, t))

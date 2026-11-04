@@ -1,126 +1,48 @@
 """Real SANPO sequences -> locus.types.Frame.
 
-Why this exists alongside aea_loader.py, not instead of it: SANPO fixes
-AEA's biggest real-data gap -- dense depth. AEA's semi-dense point-cloud
-projection covers ~18% of a frame; SANPO ships a dense CREStereo depth
-map alongside every frame (measured directly: ~96% valid-pixel coverage
-on the session this loader defaults to). It also ships already-pinhole
-intrinsics (zero distortion coefficients in that session's
-description.json) -- no fisheye correction needed, unlike AEA's Aria RGB
-camera.
+Unlike AEA's semi-dense point-cloud depth (~18% of a frame), SANPO ships
+a dense CREStereo depth map alongside every frame (~96% valid-pixel
+coverage) and already-pinhole intrinsics -- no fisheye correction needed.
 
-Access: the whole dataset is a public, ungated Google Cloud Storage
-bucket (gs://gresearch/sanpo_dataset/v0, CC-BY 4.0) -- verified by
-listing and downloading real files over plain HTTPS
-(storage.googleapis.com/gresearch/...), no gcloud CLI or GCP auth needed.
-This loader downloads per-frame files directly and caches them locally
-under paths.sanpo_cache_dir; it does not require a bulk download first.
+Access: the dataset is a public, ungated GCS bucket
+(gs://gresearch/sanpo_dataset/v0, CC-BY 4.0), reachable over plain HTTPS
+with no auth. This loader downloads per-frame files directly and caches
+them under paths.sanpo_cache_dir; no bulk download is required.
 
-Format notes (verified against real downloaded files, not assumed from
-the dataset's own docs, which say npz -- the actual files are not npz):
+Format notes (the dataset's own docs say npz; the actual files are not):
 - RGB: per-frame PNG at <session>/camera_head/left/video_frames/NNNNNN.png,
-  at the session's calibrated resolution (2208x1242 for the default
-  session).
+  at the session's calibrated resolution.
 - Depth: <session>/camera_head/left/depth_maps/NNNNNN.float16.gz -- gzip
-  of a 4-byte prefix (purpose unconfirmed -- not a width/height pair, that
-  guess was checked and ruled out) followed by a flat float16 array.
-  Verified at 1280x720 for the default session: a *different* resolution
-  than its RGB frame, so this loader resizes depth up to the RGB
-  resolution before handing out a Frame. Values are metres; non-finite or
-  <=0 is invalid. The 1280x720 depth resolution is a per-session ZED
-  setting, not assumed universal -- `depth_resolution` is a constructor
-  arg specifically so a different session can override it.
+  of a 4-byte header (DEPTH_HEADER_BYTES) followed by a flat float16
+  array. Depth and RGB can ship at different resolutions
+  (`depth_resolution` lets a session override the default), so this
+  loader resizes depth up to the RGB resolution before handing out a
+  Frame. Values are metres; non-finite or <=0 is invalid.
 - Pose: <session>/<camera>/fixed_camera_poses.csv, one row per frame
-  (index-aligned with video_frames/depth_maps, not timestamped), columns
-  tracking_state,pos_x,pos_y,pos_z,q_x,q_y,q_z,q_w. Rows with
-  tracking_state != READY carry a meaningless (0,0,0) position and are
-  skipped in favor of the nearest READY row, mirroring how
-  aea_loader.py's AeaSequence does nearest-pose lookup.
+  (index-aligned, not timestamped), columns tracking_state,pos_x,pos_y,
+  pos_z,q_x,q_y,q_z,q_w. A row with tracking_state != READY carries a
+  meaningless (0,0,0) position and is skipped for the nearest READY row.
 - Intrinsics (fx,fy,cx,cy,image size,distortion) ship per-session in
   description.json's session_camera_details[i].left_camera_params. Both
-  rig cameras report the SAME image_width/image_height (2208x1242,
-  "HD2K" for both), so the entry can't be picked by shape -- it's picked
-  by `model` (CAMERA_MODEL_ZED_2I = chest, CAMERA_MODEL_ZED_M = head),
-  cross-checked against each camera's own stereo_transform baseline
-  (~120mm chest, ~63mm head, matching the documented rig spec) so a wrong
-  mapping raises instead of silently producing right-shaped, wrong-valued
-  intrinsics. Caught and fixed after an earlier version of this loader
-  used session_camera_details[0] unconditionally for whichever camera was
-  requested -- it happened to be right for camera_head's *first* use only
-  by coincidence of list order, and silently wrong for camera_chest.
+  rig cameras report the same image size, so the entry is picked by
+  `model` (CAMERA_MODEL_ZED_2I = chest, CAMERA_MODEL_ZED_M = head), cross
+  -checked against each camera's own stereo baseline so a wrong mapping
+  raises instead of silently producing wrong-valued intrinsics.
 
-- **Rotation convention -- the one correctness issue here that visual
-  checks can't catch, and only partly resolved.** The pose's rotation is
-  camera-to-world, but nothing in SANPO's docs, README, CHANGELOG or repo
-  code states the camera's local "forward" axis. Assuming it matches
-  `locus.geometry.intrinsics.Intrinsics`' OpenCV convention (+Z forward,
-  +X right, +Y down) -- the same assumption aea_loader.py's calibration
-  correctly uses for Aria -- turned out to be wrong for SANPO, caught only
-  by cross-validating the head camera's velocity-derived heading against
-  its own quaternion-derived heading (a check with nothing to do with
-  RGB/depth, so a "does the image look right" visual check can't catch
-  it). Systematically testing all six signed local axes as candidate
-  "forward" directions against the head camera's own smoothed-velocity
-  heading found a clean, small, consistent residual (median ~22 degrees,
-  plausible gait/tracking noise) only for local -X; every other candidate
-  gave essentially random-looking errors around 100+ degrees -- this part
-  is solid.
-
-  The up axis is a genuinely open question, not just an unverified
-  algebraic afterthought. The repo names the quaternion feature
-  `camera_quaternions_right_handed_y_up`, which reads as "translation Y is
-  vertical" -- but checked directly against this loader's own
-  fixed_camera_poses.csv, Y is *not* the bounded axis: on the default
-  session (tagged elevation-flat), the whole-session translation range is
-  X=2.8m, Y=14.0m, Z=1.1m. Z stays bounded like a vertical gait-bob axis;
-  Y behaves like the dominant walking/horizontal axis -- the opposite of
-  what the feature name implies. Diffing `fixed_camera_poses.csv` against
-  the dataset's own *unfixed* `camera_poses.csv` for this same session
-  rules out a simple constant axis permutation explaining this (the two
-  trajectories diverge progressively over the session, not by a fixed
-  offset), so "fixed" looks like a genuinely re-estimated trajectory, not
-  a relabeling of "unfixed" -- meaning the "y_up" name may describe a
-  different internal representation than this literal CSV column.
-  `_R_SANPO_LOCAL_FROM_OPENCV` below assumes up=Z (the axis that's
-  actually bounded in the file this loader reads), not up=Y (the literal
-  reading of the feature name). Both choices give *identical* results on
-  every heading check run so far, because a heading check only exercises
-  the forward column of the correction matrix -- it cannot distinguish
-  between them. This matters for lifted 3D points' vertical position; it
-  does not affect depth-along-ray or heading, which is why the
-  cross-camera validation below still means what it says.
-
-  **The right axis was *also* unconfirmed here, and turned out to be
-  genuinely wrong, not just unverified** -- found once the dashboard made
-  bearing/clock-face directions actually observable end to end (a real
-  object visibly on the camera's right was being reported as "9 o'clock",
-  left). Confirmed and fixed via two independent checks (full detail in
-  `_R_SANPO_LOCAL_FROM_OPENCV`'s own comment below): `locus.geometry.frames`'
-  body-frame right/up/forward math tested correctly in isolation against a
-  synthetic scenario with no SANPO-specific code involved, and
-  reconstructing a real detection's camera-frame point and re-projecting
-  it with the right-mapping row's sign flipped moved its reported bearing
-  from the wrong side to the correct one. Pure sign flip, isolated to
-  lateral placement -- doesn't touch the forward/heading result validated
-  below.
-
-  Applying the (now forward- and right-confirmed, up-still-unconfirmed)
-  correction is what let a real cross-camera validation succeed on the
-  part it can check: the head camera's velocity-derived body-frame
-  heading agrees with the *literal* chest-camera-measured heading at a
-  median of ~22 degrees (occasional larger excursions correspond to
-  turns, where a velocity-smoothed heading estimate lags real-time
-  orientation by construction) -- the first validation of
-  locus.geometry.frames' core approximation against a directly recorded
-  body-frame reference, rather than just "it seems like a reasonable
-  thing to assume." Resolving the up-axis ambiguity with certainty needs
-  either the dataset maintainers directly (sanpo_dataset@google.com, per
-  the repo README) or a validation that actually exercises vertical
-  position, not just heading.
+- **Rotation convention: raw SANPO poses are already OpenCV-camera, in a
+  Z-up world -- no correction.** `R_world_cam` is the quaternion's
+  rotation matrix as-is, with the camera's local axes taken to be
+  OpenCV's (+X right, +Y down, +Z forward, what `Intrinsics` assumes).
+  Settled by multi-view depth reprojection across all signed axis
+  permutations on both the camera and world side: see docs/CLAUDE.md for
+  the measurements and the investigation that led here (an earlier,
+  wrong "camera-local -X is forward" correction scored far worse and was
+  in fact a reflection). Consumers pass `SanpoSequence.world_down` into
+  the memory graph / `locus.geometry.frames`.
 
 Not yet done: only camera_head is used by `load_sequence`'s default;
-camera_chest is read by the lower-level helpers (as used in the
-validation above) but no Frame-producing pipeline uses it yet.
+camera_chest is read by the lower-level helpers but no Frame-producing
+pipeline uses it yet.
 """
 
 from __future__ import annotations
@@ -142,76 +64,18 @@ from locus.types import Frame, Pose
 GCS_BASE = "https://storage.googleapis.com/gresearch/sanpo_dataset/v0/sanpo-real"
 DEPTH_HEADER_BYTES = 4  # verified: skipping exactly this many bytes yields a clean width*height float16 array
 
-# Both rig cameras report the SAME image_width/image_height (both run in
-# "HD2K" mode) but different focal lengths -- so picking the wrong
-# session_camera_details entry fails silently (shapes still match) while
-# quietly producing wrong 3D positions downstream. Model name is what
-# actually distinguishes them; confirmed against the physical rig spec
-# via each camera's own stereo_transform baseline (chest ZED-2i ~120mm,
-# head ZED Mini ~63mm -- see _verify_mount_baseline).
+# Both rig cameras report the same image size but different focal
+# lengths, so picking the wrong session_camera_details entry fails
+# silently while producing wrong 3D positions downstream. Model name
+# distinguishes them; _verify_mount_baseline cross-checks against each
+# camera's own stereo baseline so a wrong mapping raises instead.
 CAMERA_MODEL_BY_MOUNT = {"camera_head": "CAMERA_MODEL_ZED_M", "camera_chest": "CAMERA_MODEL_ZED_2I"}
 EXPECTED_BASELINE_MM = {"camera_head": 62.958637, "camera_chest": 119.918846}
 _BASELINE_TOLERANCE_MM = 5.0
 
-# Maps an OpenCV-convention camera-local vector (+X right, +Y down, +Z
-# forward -- what Intrinsics.backproject/project assume) into SANPO's raw
-# quaternion's local axes.
-#
-# Forward (-X): confirmed empirically, robustly -- see the module
-# docstring's rotation-convention note.
-#
-# Up: UNRESOLVED, not independently confirmed. The repo names the
-# quaternion feature `camera_quaternions_right_handed_y_up`, which reads
-# as "translation Y is vertical" -- but checked directly against this
-# loader's own fixed_camera_poses.csv data, Y is NOT the bounded axis: on
-# the default session (tagged elevation-flat), translation ranges over the
-# whole session are X=2.8m, Y=14.0m, Z=1.1m. Z is the one that stays
-# bounded like a vertical gait-bob axis; Y behaves like the dominant
-# walking/horizontal axis. Diffing fixed_camera_poses.csv against the
-# dataset's own unfixed camera_poses.csv for this session rules out a
-# simple constant axis permutation explaining this (the two diverge more
-# and more over the session, not by a fixed offset), so "fixed" looks like
-# a genuine re-estimated trajectory, not just a relabeling of "unfixed" --
-# meaning the "y_up" name may describe a different internal representation
-# than this literal CSV column. Below assumes up=Z (the empirically
-# bounded axis in the actual file this loader reads), not up=Y (the
-# literal reading of the feature name) -- chosen because it matches this
-# loader's own data, but genuinely unconfirmed, and it only affects
-# lateral/vertical placement of lifted 3D points, not depth-along-ray or
-# the forward/heading direction (independently confirmed, see above, and
-# unaffected by this choice: both the Y-up and Z-up versions of this
-# matrix give identical results on every forward-heading check run so
-# far, since only the up/right columns differ between them). Resolving
-# this with certainty needs either the dataset maintainers directly
-# (sanpo_dataset@google.com, per the repo README) or a validation that
-# actually exercises lateral position, not just heading.
-#
-# Right: WAS also unresolved -- found genuinely wrong, not just
-# unconfirmed, once the dashboard made bearing/clock-face directions
-# actually observable end to end. A real object visually on the camera's
-# right (e.g. a parked van, frame 8 of the default session) was being
-# reported as "9 o'clock" (left). Isolated with two independent checks
-# before touching this matrix, per this file's own established discipline
-# of not guessing axis fixes silently: (1) locus.geometry.frames'
-# body-frame right/up/forward math, tested standalone against an
-# unambiguous synthetic East/North/Up scenario with no SANPO-specific code
-# involved, gives the physically correct sign -- that logic was never the
-# bug; (2) reconstructing the real camera-frame point for that van
-# (inverting the then-current R_world_cam) and re-projecting it through a
-# version of this matrix with only the right-mapping row sign-flipped
-# turned its reported bearing from -86.6 degrees (left) to +104.6 degrees
-# (right) -- the correct side, confirming the fix. The row below was
-# `[1, 0, 0]` (camera-right -> SANPO-local +Y); it's now `[-1, 0, 0]`
-# (camera-right -> SANPO-local -Y). This is a pure sign flip of the
-# right/left mapping only -- forward and up (confirmed/chosen above) are
-# untouched, and it does not affect range or depth-along-ray, only lateral
-# placement and anything derived from it (bearing, clock-face position,
-# stereo audio pan, the 3D World View's left/right layout).
-_R_SANPO_LOCAL_FROM_OPENCV = np.array([
-    [0.0, 0.0, -1.0],
-    [-1.0, 0.0, 0.0],
-    [0.0, -1.0, 0.0],
-])
+# Gravity in SANPO's world frame -- see the module docstring's rotation
+# convention note for how this (and "no camera-axis correction") was measured.
+SANPO_WORLD_DOWN = (0.0, 0.0, -1.0)
 
 
 def _download(url: str, dest: Path) -> Path:
@@ -286,6 +150,7 @@ class SanpoSequence:
     n_frames: int
     depth_resolution: tuple[int, int]  # (height, width), as actually stored
     _poses: list[tuple[bool, np.ndarray, np.ndarray]]
+    world_down: tuple[float, float, float] = SANPO_WORLD_DOWN
 
     def _nearest_ready_pose(self, frame_index: int) -> tuple[np.ndarray, np.ndarray]:
         n = len(self._poses)
@@ -349,8 +214,7 @@ class SanpoSequence:
             depth[~np.isfinite(depth) | (depth <= 0)] = 0.0
 
             p_world, quat_xyzw = self._nearest_ready_pose(i)
-            R_world_sanpolocal = Rotation.from_quat(quat_xyzw).as_matrix()
-            R_world_cam = R_world_sanpolocal @ _R_SANPO_LOCAL_FROM_OPENCV
+            R_world_cam = Rotation.from_quat(quat_xyzw).as_matrix()
             t = i / self.fps
             pose = Pose(timestamp=t, R_world_cam=R_world_cam, t_world_cam=p_world)
             yield Frame(timestamp=t, rgb=rgb, depth=depth, pose=pose)

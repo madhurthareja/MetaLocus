@@ -83,111 +83,141 @@ def test_dense_depth_lifts_far_more_detections_than_aea_style_sparse_depth():
     assert successes / total > 0.9, "dense SANPO depth should clear the lifting threshold almost everywhere"
 
 
-def test_velocity_derived_heading_matches_chest_camera_measured_heading():
-    """The actual validation this whole rotation-convention investigation
-    was for: does locus.geometry.frames' velocity-derived body-frame
-    heading (from the head camera's own trajectory) agree with SANPO's
-    *literal* chest-camera-measured orientation? Before correcting the
-    local-forward-axis assumption (see sanpo_loader.py's module docstring),
-    this comparison was ~130 degrees off and essentially uncorrelated --
-    not a validation of anything. With the correction applied, it agrees
-    at a median of a few tens of degrees, consistent with real gait/turn
-    noise rather than a convention bug."""
-    from locus.data.sanpo_loader import _load_poses
+def _yaw_deg_about_down(v: np.ndarray, world_down: np.ndarray) -> float:
+    """Heading of `v` in the plane perpendicular to gravity, against a fixed
+    horizontal reference -- only differences of two of these are used."""
     from locus.geometry.frames import body_rotation_from_velocity
-    from locus.geometry.kinematics import finite_difference_velocity
+
+    ref = body_rotation_from_velocity(np.array([1.0, 1.0, 1.0]), world_down)  # any non-vertical direction
+    return float(np.degrees(np.arctan2(v @ ref[:, 0], v @ ref[:, 2])))
+
+
+def test_velocity_derived_heading_matches_chest_camera_measured_heading():
+    """Does locus.geometry.frames' velocity-derived body-frame heading (from
+    the head camera's own trajectory) agree with SANPO's *literal*
+    chest-camera-measured orientation? Yaw is measured in the plane
+    perpendicular to SANPO's real gravity axis (world Z). An earlier version
+    of this test measured it as atan2(x, z) -- assuming Y-up in a world where
+    the wearer walks along +Y -- which discarded the dominant motion
+    component and let a wrong camera-axis correction pass at a ~22 degree
+    "median" (see sanpo_loader.py's rotation-convention note). Measured
+    correctly: 14.7 degrees median on walking frames."""
     from pathlib import Path
 
+    from scipy.spatial.transform import Rotation
+
+    from locus.data.sanpo_loader import SANPO_WORLD_DOWN, _load_poses
+
+    world_down = np.array(SANPO_WORLD_DOWN)
     session_id = config["sanpo_sequences"][0]
     cache_root = Path(config["paths"]["sanpo_cache_dir"]) / session_id
     head_poses = _load_poses(session_id, cache_root / "camera_head", camera="camera_head")
     chest_poses = _load_poses(session_id, cache_root / "camera_chest", camera="camera_chest")
     n = min(len(head_poses), len(chest_poses))
-    fps = 15.0
     window = 15  # 1s smoothing -- a single-frame velocity is too noisy for a bobbing walking gait
 
-    def yaw_deg(v: np.ndarray) -> float:
-        return float(np.degrees(np.arctan2(v[0], v[2])))
-
     diffs = []
-    for i in range(window, n, 5):
+    for i in range(window, n, 3):
         h_ready, h_pos, _ = head_poses[i]
         h_ready_prev, h_pos_prev, _ = head_poses[i - window]
         c_ready, _, c_quat = chest_poses[i]
         if not (h_ready and h_ready_prev and c_ready):
             continue
-        velocity_world = finite_difference_velocity(h_pos_prev, h_pos, window / fps)
-        if np.linalg.norm(velocity_world) < 0.1:
-            continue
-        approx_heading = yaw_deg(body_rotation_from_velocity(velocity_world)[:, 2])
-
-        from scipy.spatial.transform import Rotation
-
-        from locus.data.sanpo_loader import _R_SANPO_LOCAL_FROM_OPENCV
-
-        R_chest = Rotation.from_quat(c_quat).as_matrix() @ _R_SANPO_LOCAL_FROM_OPENCV
-        chest_heading = yaw_deg(R_chest @ np.array([0.0, 0.0, 1.0]))
-
-        diffs.append((approx_heading - chest_heading + 180) % 360 - 180)
+        velocity_world = h_pos - h_pos_prev
+        velocity_world = velocity_world - (velocity_world @ world_down) * world_down
+        if np.linalg.norm(velocity_world) * 15.0 / window < 0.3:
+            continue  # standing still: no velocity heading to compare
+        chest_forward = Rotation.from_quat(c_quat).as_matrix()[:, 2]
+        diff = _yaw_deg_about_down(velocity_world, world_down) - _yaw_deg_about_down(chest_forward, world_down)
+        diffs.append((diff + 180) % 360 - 180)
 
     diffs = np.array(diffs)
     assert len(diffs) > 20, "too few comparable frames to mean anything"
-    assert np.median(np.abs(diffs)) < 45, (
-        f"velocity-derived heading should roughly track the real chest-camera heading "
-        f"(median diff {np.median(np.abs(diffs)):.1f} deg) -- if this regresses, check "
-        f"the rotation-convention assumptions in sanpo_loader.py's module docstring first"
+    assert np.median(np.abs(diffs)) < 25, (
+        f"velocity-derived heading should track the real chest-camera heading "
+        f"(median diff {np.median(np.abs(diffs)):.1f} deg, measured 14.7) -- if this regresses, "
+        f"check SANPO_WORLD_DOWN and the no-correction rotation convention in sanpo_loader.py first"
     )
 
 
-def test_camera_right_maps_to_positive_body_frame_bearing():
-    """Regression test for a real axis-convention bug: SANPO's camera-axis
-    correction matrix was mapping the camera's own right side to a
-    NEGATIVE (left, "9 o'clock") body-frame bearing -- found once the
-    dashboard made bearing/clock-face directions actually observable end
-    to end (a parked van clearly on the camera's right was reported as
-    left). See `_R_SANPO_LOCAL_FROM_OPENCV`'s own comment in
-    sanpo_loader.py for how this was isolated and fixed (a pure sign flip
-    of the right-mapping row, forward/up untouched).
-
-    Checked on a single frame first; that was flaky (a camera-relative
-    offset isn't the same thing as a body/walking-direction-relative one
-    whenever the head is turned mid-stride, same real-world noise source
-    the heading test above already has to tolerate), so -- like that
-    test -- this aggregates over many frames instead of trusting one. A
-    synthetic point placed in front of and to the camera's own right
-    (OpenCV convention: +X right, +Z forward) should land on the right
-    (positive bearing) on a clear majority of frames; measured directly:
-    72.9% with the fix applied vs. 27.1% with the pre-fix matrix on this
-    same session (near-perfect mirror images of each other, confirming
-    this is a sign flip, not just noise)."""
+def test_identity_rotation_convention_is_multiview_consistent():
+    """The check that actually settles SANPO's rotation convention (see
+    sanpo_loader.py): a static scene point lifted from one frame's depth
+    and carried through world into a frame ~0.5s later must land on that
+    frame's own measured depth. The raw quaternion (no camera-axis
+    correction) does this at ~16% median relative depth error over a
+    multi-pair search; the convention this loader used to apply scored at
+    chance (~45%). Any axis or handedness mistake in R_world_cam breaks it."""
     from locus.data.sanpo_loader import load_sequence
-    from locus.geometry.frames import bearing_rad, ego_to_world, world_to_body
-    from locus.geometry.kinematics import finite_difference_velocity
 
     session_id = config["sanpo_sequences"][0]
     seq = load_sequence(session_id, config=config)
-    frames = list(seq.iter_frames(max_frames=60))
+    K = seq.intrinsics
+    rng = np.random.default_rng(0)
 
-    positive = 0
-    total = 0
-    for f_prev, f_cur in zip(frames, frames[1:]):
-        dt = f_cur.pose.timestamp - f_prev.pose.timestamp
-        if dt <= 0:
+    def reprojection_error(i: int, j: int, R_fix: np.ndarray) -> float:
+        fi = next(seq.iter_frames(max_frames=1, start_frame=i))
+        fj = next(seq.iter_frames(max_frames=1, start_frame=j))
+        us = rng.integers(0, K.width, 4000)
+        vs = rng.integers(0, K.height, 4000)
+        z = fi.depth[vs, us]
+        ok = (z > 0.5) & (z < 15)
+        us, vs, z = us[ok], vs[ok], z[ok]
+        p_cam = np.stack([(us - K.cx) / K.fx * z, (vs - K.cy) / K.fy * z, z], 1)
+        Ri, Rj = fi.pose.R_world_cam @ R_fix, fj.pose.R_world_cam @ R_fix
+        p_world = (Ri @ p_cam.T).T + fi.pose.t_world_cam
+        p_j = (Rj.T @ (p_world - fj.pose.t_world_cam).T).T
+        front = p_j[:, 2] > 0.3
+        u = (p_j[front, 0] / p_j[front, 2] * K.fx + K.cx).astype(int)
+        v = (p_j[front, 1] / p_j[front, 2] * K.fy + K.cy).astype(int)
+        inside = (u >= 0) & (u < K.width) & (v >= 0) & (v < K.height)
+        measured = fj.depth[v[inside], u[inside]]
+        predicted = p_j[front, 2][inside]
+        good = measured > 0
+        return float(np.median(np.abs(predicted[good] - measured[good]) / measured[good]))
+
+    old_convention = np.array([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]])
+    pairs = [(20, 28), (100, 108)]  # both READY, walking
+    identity_err = np.mean([reprojection_error(i, j, np.eye(3)) for i, j in pairs])
+    old_err = np.mean([reprojection_error(i, j, old_convention) for i, j in pairs])
+    assert identity_err < 0.15, f"raw-quaternion convention should be multi-view consistent, got {identity_err:.1%}"
+    assert identity_err < 0.5 * old_err, f"identity {identity_err:.1%} should clearly beat the old convention {old_err:.1%}"
+
+
+def test_reported_side_matches_image_side():
+    """The left/right check that matches what a user actually hears: on
+    frames where the head faces roughly the walking direction, a point on
+    the image's right half must be reported on the right (positive body
+    bearing), and vice versa. Measured on the shipped dashboard run before
+    the convention fix: 55% agreement (a coin flip); after: 99%. This
+    replaces a test that only checked a sign against a body frame whose
+    "right" axis was, on SANPO's Z-up world, built from velocity noise."""
+    from locus.data.sanpo_loader import load_sequence
+    from locus.geometry.frames import bearing_rad, ego_to_world, horizontal, world_to_body
+    from locus.geometry.kinematics import WearerMotion
+
+    session_id = config["sanpo_sequences"][0]
+    seq = load_sequence(session_id, config=config)
+    world_down = np.array(seq.world_down)
+    motion = WearerMotion(world_down=world_down)
+
+    agree = total = 0
+    for frame in seq.iter_frames(max_frames=200):
+        _, heading = motion.update(frame.timestamp, frame.pose.t_world_cam)
+        if heading is None or np.linalg.norm(motion.velocity) == 0:
             continue
-        velocity = finite_difference_velocity(f_prev.pose.t_world_cam, f_cur.pose.t_world_cam, dt)
-        p_cam_right = np.array([2.0, 0.0, 5.0])  # 5m ahead, 2m to the camera's own right
-        p_world = ego_to_world(p_cam_right, f_cur.pose)
-        p_body = world_to_body(p_world, f_cur.pose.t_world_cam, velocity)
-        positive += bearing_rad(p_body) > 0
-        total += 1
+        cam_fwd = horizontal(frame.pose.R_world_cam[:, 2], world_down)
+        cam_fwd /= np.linalg.norm(cam_fwd)
+        if np.degrees(np.arccos(np.clip(cam_fwd @ heading, -1, 1))) > 20:
+            continue
+        for side in (+1.0, -1.0):  # 2m to the camera's right / left, 5m ahead
+            p_world = ego_to_world(np.array([2.0 * side, 0.0, 5.0]), frame.pose)
+            p_body = world_to_body(p_world, frame.pose.t_world_cam, heading, world_down)
+            agree += np.sign(bearing_rad(p_body)) == side
+            total += 1
 
-    assert total > 20, "too few comparable frames to mean anything"
-    fraction_right = positive / total
-    assert fraction_right > 0.6, (
-        f"a camera-right point should land on the right on a clear majority of frames "
-        f"(got {fraction_right:.0%}) -- if this regresses toward ~0.27, check "
-        f"_R_SANPO_LOCAL_FROM_OPENCV's sign in sanpo_loader.py first"
-    )
+    assert total > 40, "too few walking, forward-facing frames to mean anything"
+    assert agree / total > 0.9, f"reported side should match image side (got {agree / total:.0%})"
 
 
 def test_prefetch_populates_cache_so_iter_frames_does_no_network_io():

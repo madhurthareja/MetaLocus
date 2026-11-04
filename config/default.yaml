@@ -46,22 +46,13 @@ aea_sequences:
   - loc3_script4_seq7_rec1
   - loc3_script3_seq1_rec1
 
-# Verified by hand: ego_motion WALKING, moderate traffic, medium obstacles,
-# sunny/high visibility, 539 frames @ 15fps. Dense depth (~96% valid pixels),
-# vs. AEA's ~18% from semi-dense point-cloud projection -- this is why SANPO
-# was added alongside AEA, not instead of it.
-#
-# SANPO's public GCS bucket (gs://gresearch/sanpo_dataset/v0/sanpo-real/) has
-# 75 real sessions, not just this one -- checked by listing it directly, not
-# assumed. Two more added below, picked by querying each candidate's own
-# description.json (not guessed): both WALKING, HIGH visibility, 400+ frames,
-# and -- the actual reason for picking these two specifically -- real
-# vehicular traffic at an urban road junction, which is what actually
-# produces genuine closing-hazard events instead of a quiet park walk.
+# Real SANPO walks (public bucket gs://gresearch/sanpo_dataset/v0/sanpo-real/),
+# chosen from each session's description.json: all ego_motion=WALKING, high
+# visibility, urban road junctions with real traffic. The comment on each is
+# its dashboard session name (dashboard/data/<name>) and scene tags.
 sanpo_sequences:
-  - "-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG"
-  # URBAN + ROAD_JUNCTION, vehicular_traffic=HEAVY, human_traffic=LOW, 402 frames.
-  - "11tnj2tdX_ElmqXEv6kwSXI34_ZWXv-N"
-  # URBAN + ROAD_JUNCTION, vehicular_traffic=MODERATE, human_traffic=MODERATE,
-  # num_obstacles=HIGH, 436 frames.
-  - "2dVxdA3XmypOsgSWv27dtf3GxjGUkB5A"
+  - "-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG"  # sanpo_scaffolding_sidewalk_to_crossing -- heavy vehicles, moderate pedestrians, 539 frames (default/primary)
+  - "11tnj2tdX_ElmqXEv6kwSXI34_ZWXv-N"  # sanpo_parked_trucks_avenue -- heavy vehicles, few pedestrians, 402 frames
+  - "2dVxdA3XmypOsgSWv27dtf3GxjGUkB5A"  # sanpo_downtown_plaza_corner -- moderate traffic, many obstacles, 436 frames
+  - "CCOQeLblEBD4ICLpXikheOgdG1ALcZdM"  # sanpo_delivery_trucks_junction -- moderate traffic, many obstacles, 294 frames
+  - "5FV83N_oWfy5whlWhbDUX_2uF2_jx1Pd"  # sanpo_plaza_cyclists -- moderate traffic, few obstacles, 234 frames

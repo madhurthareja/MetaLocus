@@ -26,8 +26,8 @@ import numpy as np
 from locus.actuation.directives import describe
 from locus.actuation.tts import build_tts_backend
 from locus.config import DEFAULT_CONFIG_PATH, load_config
-from locus.geometry.frames import bearing_clockface, world_to_body
-from locus.geometry.kinematics import finite_difference_velocity
+from locus.geometry.frames import WORLD_DOWN_DEFAULT, bearing_clockface, world_to_body
+from locus.geometry.kinematics import WearerMotion
 from locus.geometry.lifting import lift
 from locus.memory.graph import SpatialMemoryGraph
 from locus.perception.sam3_native import Sam31NativeSegmenter
@@ -144,25 +144,24 @@ def main() -> None:
             node_decay_half_life_seconds=config["memory"]["node_decay_half_life_seconds"],
             node_eviction_seconds=config["memory"]["node_eviction_seconds"],
             edge_radius_m=args.edge_radius_m or config["memory"]["edge_radius_m"],
+            world_down=getattr(seq, "world_down", WORLD_DOWN_DEFAULT),
         )
 
         print("[5/5] Lifting detections to 3D, feeding the persistent memory graph...")
         from locus.geometry.frames import ego_to_world
 
         prev_pose = None
-        wearer_velocity = np.zeros(3)
+        wearer_motion = WearerMotion(world_down=getattr(seq, "world_down", WORLD_DOWN_DEFAULT))
+        wearer_velocity, wearer_heading = np.zeros(3), None
         total_detections = 0
         total_lifted = 0
         for frame in frames:
             detections = segmenter.step(frame)
             total_detections += len(detections)
 
-            if prev_pose is not None:
-                dt = frame.pose.timestamp - prev_pose.timestamp
-                if dt > 0:
-                    wearer_velocity = finite_difference_velocity(
-                        prev_pose.t_world_cam, frame.pose.t_world_cam, dt
-                    )
+            wearer_velocity, wearer_heading = wearer_motion.update(
+                frame.timestamp, frame.pose.t_world_cam, camera_forward_world=frame.pose.R_world_cam[:, 2]
+            )
             prev_pose = frame.pose
 
             instances = []
@@ -202,7 +201,7 @@ def main() -> None:
         print(f"\n[TTS] loading {config['tts']['backend']}...")
 
     if prev_pose is not None:
-        edges = graph.edges(prev_pose.t_world_cam, wearer_velocity)
+        edges = graph.edges(prev_pose.t_world_cam, wearer_velocity, wearer_heading, t=prev_pose.timestamp)
         print()
         print(f"Edges from the wearer's final position ({len(edges)}):")
         for edge in edges:

@@ -56,3 +56,24 @@ def test_cue_pulses_faster_as_ttc_shrinks():
 
     assert _envelope_variance(near_cue) > _envelope_variance(far_cue), "closer hazard should pulse harder/faster"
     assert _envelope_variance(steady_cue) < _envelope_variance(far_cue), "no TTC should be the steadiest tone"
+
+
+def test_closing_object_that_passes_clear_is_not_critical():
+    """Walking past a pole a metre to the side closes on it fast, but never
+    reaches it -- measured on real SANPO, every remaining "critical" pole
+    alert had a 1.0m miss distance."""
+    from locus.actuation.directives import CPA_GATE_M, is_critical, severity
+
+    passing = Edge(src_node_id=0, dst_node_id=1, range_m=1.7, bearing_rad=0.6, elevation_delta_m=0.0,
+                   ttc_s=1.7, cpa_m=1.0)
+    head_on = Edge(src_node_id=0, dst_node_id=1, range_m=1.7, bearing_rad=0.0, elevation_delta_m=0.0,
+                   ttc_s=1.7, cpa_m=0.1)
+    assert CPA_GATE_M < passing.cpa_m
+    assert not is_critical(passing) and severity(passing) == "advisory"
+    assert "," not in describe("pole", passing), "a passing object is mentioned, not framed as a hazard"
+    assert is_critical(head_on) and severity(head_on) == "critical"
+
+
+def test_approaching_object_gets_the_short_form_with_seconds():
+    text = describe("bicycle", _edge(ttc_s=4.0))
+    assert text == "bicycle, 12 o'clock, 4s"

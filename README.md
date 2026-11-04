@@ -38,12 +38,14 @@ Day-to-day project context for Claude Code: **[docs/CLAUDE.md](docs/CLAUDE.md)**
 | SAM 3.1 native segmenter | **Done** — real session wiring, run successfully on both real SANPO and AEA frames; mask quality verified visually, not just "it ran" |
 | EdgeTAM live segmenter (`--segmenter edgetam`) | **Done** — genuinely causal/streaming alternative to SAM 3.1's batch pass, for the real-time path; ~10.5 FPS on real SANPO frames (vs. SAM 3.1's 0.17-0.68 FPS). Lower accuracy on long clips (no occlusion re-identification), substantially mitigated by periodic re-grounding — see `docs/CLAUDE.md` for real measured before/after numbers |
 | Spoken-directive pacing + dashboard playback speed | **Done** — at most one directive spoken per cooldown window (safety escalation always cuts in); cut one real session from 252 unique spoken clips to 23. See `docs/CLAUDE.md` |
+| SANPO left/right + hazard-alert noise | **Found and fixed** — SANPO's pose convention was being mirrored (reported side matched image side 55% of the time → 100%); ~94% of critical alerts were velocity noise (static-object jitter, segmenter identity swaps, walking past things) → class-dependent memory, per-segment mover velocity, closest-approach gate. Critical frames on the real session 342 → 0 (the last two were one-frame blips on parked vehicles, removed by a 3-frame hold). See `docs/CLAUDE.md` |
+| Speech novelty rule | **Done** — each object announced once, again only on a real change (severity up, or a 2+ clock-hour move ahead); spoken cues on the real session 25 → 12 |
 | Complete real-data thread (pose + RGB + depth + segmentation + memory graph + TTC + directives + spoken TTS) | `scripts/generate_dashboard_data.py --dataset {sanpo,aea} [--segmenter sam3.1\|edgetam]` is now the primary entry point (produces a full dashboard session); `scripts/run_real_sequence.py` was the original one-shot proof and still works but is superseded by it |
 | TTS (spoken directives) | **Done** — Meta SeamlessM4T v2 (`src/locus/actuation/tts.py`); Voicebox/Audiobox were investigated and are not actually available (see `docs/CLAUDE.md`) |
 | Duplicate-node bug (SAM 3.1 double-tracking one object → two memory-graph nodes) | **Found and fixed** on real data — see `docs/CLAUDE.md` |
 | `app/pipeline.py` (the productionized async version of the above) | Not yet built |
 
-Run the test suite: `pytest tests/ -v` (29 tests, all passing as of this
+Run the test suite: `pytest tests/ -v` (55 tests, all passing as of this
 writing — spans geometry, memory, the eval harness's own thesis-regression
 test, audio actuation, TTS wiring, and real-data integration tests for
 both SANPO and AEA that skip cleanly if the data/network isn't reachable

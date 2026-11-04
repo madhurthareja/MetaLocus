@@ -236,7 +236,7 @@ export class HudPreview {
   constructor(container) {
     this.container = container;
     container.innerHTML = `
-      <div class="hud-outer"><div class="hud-lens" id="hud-lens"><div class="hud-state-label" id="hud-statelabel">PATH CLEAR</div></div></div>
+      <div class="hud-outer"><div class="hud-lens" id="hud-lens"><div class="hud-state-label" id="hud-statelabel">NO ALERTS</div></div></div>
       <div class="hud-caption-row"><span>Spoken directive <span class="spoken" id="hud-spoken">--</span></span><span id="hud-tone">tone: --</span></div>`;
     on('frame-changed', () => this.render());
     on('session-loaded', () => this.render());
@@ -250,8 +250,12 @@ export class HudPreview {
     const edge = mostUrgentEdge(frame.edges);
     const sev = hazardSeverity(edge);
 
+    // Never "PATH CLEAR": nothing detected among the tracked concepts is not
+    // the same as a safe path (curbs, holes and anything not being looked
+    // for are invisible here), and false reassurance is the one error that
+    // can actually hurt someone.
     if (!edge) {
-      lens.innerHTML = `<div class="hud-state-label">STATE 1 · NO HAZARD</div><div class="hud-directive-text" style="font-size:17px; color:#4F8A91;">PATH CLEAR</div>`;
+      lens.innerHTML = `<div class="hud-state-label">STATE 1 · NO ALERTS</div><div class="hud-directive-text" style="font-size:17px; color:#4F8A91;">NO ALERTS</div>`;
       this.container.querySelector('#hud-spoken').textContent = '--';
       this.container.querySelector('#hud-tone').textContent = 'tone: silent';
       return;
@@ -262,7 +266,10 @@ export class HudPreview {
     const isClosing = sev === 'hazard' || sev === 'critical';
     const hour = clockHour(edge.bearing_deg);
     const side = edge.bearing_deg > 5 ? 'RIGHT' : edge.bearing_deg < -5 ? 'LEFT' : 'AHEAD';
-    const label = sev === 'critical' ? 'STOP' : isClosing ? `CAUTION ${side}` : `${edge.concept.toUpperCase()} ${side}`;
+    // Describe, don't instruct: even a critical alert names the thing and
+    // its side rather than commanding "STOP" -- the wearer knows their own
+    // route and how to move; the system only knows where the object is.
+    const label = sev === 'critical' ? `${edge.concept.toUpperCase()} · ${side}` : isClosing ? `CAUTION ${side}` : `${edge.concept.toUpperCase()} ${side}`;
     const words = edge.directive.split(' ').slice(0, 6).join(' ');
     const stateLabel = sev === 'critical' ? '3 · CRITICAL' : sev === 'hazard' ? '2 · APPROACHING' : '1 · TRACKED';
     lens.innerHTML = `

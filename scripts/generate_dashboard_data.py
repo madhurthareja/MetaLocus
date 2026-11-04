@@ -24,53 +24,57 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from locus.actuation.directives import describe, is_critical
+from locus.actuation.directives import describe
 from locus.actuation.narrator import SparkNarrator
+from locus.actuation.speech_policy import SpeechPolicy
 from locus.actuation.tts import build_tts_backend
 from locus.config import DEFAULT_CONFIG_PATH, load_config
-from locus.geometry.frames import ego_to_world
-from locus.geometry.kinematics import finite_difference_velocity
+from locus.geometry.frames import WORLD_DOWN_DEFAULT, ego_to_world, horizontal
+from locus.geometry.kinematics import WearerMotion
 from locus.geometry.lifting import lift
 from locus.memory.graph import SpatialMemoryGraph
+from locus.memory.motion_classes import DEFAULT_CAUTIOUS_MAX_SPEED_MPS, MOVABLE, UNKNOWN, motion_class, register_motion_classification
 from locus.types import Instance3D
 
 DASHBOARD_IMG_WIDTH = 640
 N_CONCEPT_CHECKPOINTS = 3  # later re-proposal points through the clip, beyond the initial frame-0 one
 MAX_NEW_CONCEPTS_PER_CHECKPOINT = 2  # bounds extra SAM 3.1 sessions per checkpoint
 
-# Spoken-directive pacing. Before this, a directive+audio clip was attached
-# to every hazard edge on every frame -- correct per-frame, but a blind
-# listener experiences this in real time, not as a data table: the moment
-# phrasing shifted by even one clock-position bucket, a brand-new clip
-# would fire the instant the previous one finished, with no gap to actually
-# process what was just said. Real accessibility audio needs silence
-# between cues. Only one edge (the single most urgent, same selection rule
-# the dashboard already used client-side) is ever elected to speak per
-# frame, and only when enough time has passed since the last spoken cue --
-# except a genuine escalation into critical range, which always cuts in
-# immediately. Safety beats pacing; routine updates don't.
-DIRECTIVE_COOLDOWN_S = 3.0  # normal pacing -- long enough to finish a ~1s phrase and leave a breath after it
-CRITICAL_COOLDOWN_S = 1.2  # a still-critical object gets re-confirmed more often, but still not every frame
+
+def classify_unlisted_concepts(concepts: list[str]) -> None:
+    """Ask Spark to classify any concept locus.memory.motion_classes'
+    hardcoded static/movable vocabulary doesn't already cover, so it
+    isn't left with zero velocity protection for the rest of the run --
+    the hardcoded lists can't anticipate every concept Spark proposes.
+    Costs one Spark call per newly-seen unlisted concept, not per frame;
+    a concept already classified in a prior call this run is skipped.
+    """
+    unlisted = [c for c in dict.fromkeys(concepts) if motion_class(c) == UNKNOWN]
+    if not unlisted:
+        return
+    print(f"       {len(unlisted)} concept(s) outside the known static/movable vocabulary {unlisted}: asking Spark...")
+    from locus.perception.spark_proposer import SparkProposer
+
+    try:
+        classifications = SparkProposer().classify_motion(unlisted)
+        for concept in unlisted:
+            kind, speed = classifications.get(concept, (MOVABLE, DEFAULT_CAUTIOUS_MAX_SPEED_MPS))
+            register_motion_classification(concept, kind, speed)
+            print(f"         {concept!r} -> {kind}" + (f" (max {speed:.0f} m/s)" if kind == MOVABLE else ""))
+    except Exception as exc:
+        # A failed classification call must not mean "run unprotected" --
+        # that's the exact gap this function exists to close. Default to
+        # movable/cautious (DEFAULT_CAUTIOUS_MAX_SPEED_MPS) instead of
+        # leaving these concepts at the old unconstrained behavior.
+        print(f"         Spark classification failed ({exc}); defaulting to movable/cautious rather than unprotected")
+        for concept in unlisted:
+            register_motion_classification(concept, MOVABLE, DEFAULT_CAUTIOUS_MAX_SPEED_MPS)
 
 
 def _resize(rgb: np.ndarray) -> np.ndarray:
     h, w = rgb.shape[:2]
     scale = DASHBOARD_IMG_WIDTH / w
     return cv2.resize(rgb, (DASHBOARD_IMG_WIDTH, int(h * scale)))
-
-
-def _most_urgent_edge(edges):
-    """Which single edge the system would actually speak about this frame --
-    same selection rule the dashboard already applies client-side
-    (state.js's mostUrgentEdge), moved here so the real pipeline picks the
-    same one edge rather than treating every tracked hazard as equally
-    speakable."""
-    if not edges:
-        return None
-    with_ttc = [e for e in edges if e.ttc_s is not None]
-    if with_ttc:
-        return min(with_ttc, key=lambda e: e.ttc_s)
-    return min(edges, key=lambda e: e.range_m)
 
 
 def _encode_session_video(image_dir: Path, out_path: Path, fps: float) -> None:
@@ -101,6 +105,10 @@ def _encode_session_video(image_dir: Path, out_path: Path, fps: float) -> None:
 
 
 def main() -> None:
+    from locus.memory.motion_classes import reset_registered_classifications
+
+    reset_registered_classifications()  # a fresh registry per run, not per process
+
     parser = argparse.ArgumentParser()
     parser.add_argument("sequence_id", nargs="?", default=None)
     parser.add_argument("--dataset", choices=["aea", "sanpo", "synthetic"], default="sanpo")
@@ -117,6 +125,13 @@ def main() -> None:
         "always uses MockSegmenter).",
     )
     parser.add_argument("--edge-radius-m", type=float, default=20.0)
+    parser.add_argument(
+        "--max-frames", type=int, default=None,
+        help="truncate real (sanpo/aea) sequences to this many frames -- AEA sessions run "
+        "1999-4262 frames at 20fps vs SANPO's ~400-540 at 15fps, far too long for a batch run "
+        "at full length. Ignored for synthetic, which is already short.",
+    )
+    parser.add_argument("--start-frame", type=int, default=0, help="first frame index for real (sanpo/aea) sequences")
     parser.add_argument("--out", default=None, help="output dir, default dashboard/data/<dataset>_<session>")
     parser.add_argument("--speak", action="store_true", default=True)
     parser.add_argument("--no-speak", dest="speak", action="store_false")
@@ -134,15 +149,19 @@ def main() -> None:
         print(f"      {seq.n_frames} frames @ {seq.fps}fps = {seq.n_frames / seq.fps:.1f}s")
         print("      prefetching all RGB+depth files in parallel (16 workers)...")
         seq.prefetch()
-        frames = list(seq.iter_frames())
+        frames = list(seq.iter_frames(max_frames=args.max_frames, start_frame=args.start_frame))
     elif args.dataset == "aea":
         from locus.data.aea_loader import load_point_cloud, load_sequence
 
         session_id = args.sequence_id or config["aea_sequences"][0]
-        print(f"[1/7] Loading FULL AEA sequence {session_id!r}...")
+        print(f"[1/7] Loading AEA sequence {session_id!r}...")
         seq = load_sequence(session_id, config=config)
+        print(f"      {seq.n_video_frames} frames @ {seq.fps}fps = {seq.n_video_frames / seq.fps:.1f}s total"
+              + (f", using {args.max_frames} from frame {args.start_frame}" if args.max_frames else ""))
         points_world = load_point_cloud(session_id, config=config)
-        frames = list(seq.iter_frames(point_cloud_world=points_world))
+        frames = list(seq.iter_frames(
+            point_cloud_world=points_world, max_frames=args.max_frames, start_frame=args.start_frame,
+        ))
     else:
         from locus.data import synthetic
 
@@ -179,6 +198,9 @@ def main() -> None:
         print("[2/7] Proposing concepts from the first frame (Meta Model API, muse-spark-1.3)...")
         concepts = SparkProposer(max_concepts=config["perception"]["max_concepts"]).propose(frames[0], {})
         print(f"      Spark proposed: {concepts}")
+
+    if ground_truth is None:
+        classify_unlisted_concepts(concepts)
 
     palette = [(220, 60, 60), (60, 160, 220), (80, 200, 100), (220, 170, 50), (160, 90, 210), (60, 200, 200)]
     concept_colors = {c: palette[i % len(palette)] for i, c in enumerate(concepts)}
@@ -225,13 +247,16 @@ def main() -> None:
                     idx = min(len(frames) - 1, round(len(frames) * k / (N_CONCEPT_CHECKPOINTS + 1)))
                     proposed = checkpoint_proposer.propose(frames[idx], {})
                     new_candidates = [c for c in proposed if c not in concepts][:MAX_NEW_CONCEPTS_PER_CHECKPOINT]
+                    added_this_checkpoint = []
                     for concept in new_candidates:
                         if segmenter.add_concept_at(concept, start_frame_idx=idx):
                             concepts.append(concept)
                             concept_colors[concept] = palette[len(concept_colors) % len(palette)]
+                            added_this_checkpoint.append(concept)
                             print(f"       +{concept!r} at t={frames[idx].timestamp:.1f}s (frame {idx})")
                         else:
                             print(f"       skipped {concept!r} at frame {idx} -- Spark proposed it, SAM 3.1 found nothing there")
+                    classify_unlisted_concepts(added_this_checkpoint)
         else:
             from locus.perception.edgetam_segmenter import EdgeTamSegmenter
 
@@ -264,15 +289,18 @@ def main() -> None:
                         for concept in new_candidates:
                             concept_colors[concept] = palette[len(concept_colors) % len(palette)]
                         segmenter.update_concepts(concepts)
+                        classify_unlisted_concepts(new_candidates)
                         print(f"       widened vocabulary with {new_candidates} at t={frames[idx].timestamp:.1f}s (frame {idx})")
     finally:
         shutil.rmtree(sam_frame_dir, ignore_errors=True)
 
     print("[4/7] Lifting detections, feeding the persistent memory graph, rendering per-frame output...")
+    world_down = np.asarray(getattr(seq, "world_down", WORLD_DOWN_DEFAULT), dtype=float)
     graph = SpatialMemoryGraph(
         node_decay_half_life_seconds=config["memory"]["node_decay_half_life_seconds"],
         node_eviction_seconds=config["memory"]["node_eviction_seconds"],
         edge_radius_m=args.edge_radius_m,
+        world_down=world_down,
     )
     tts = build_tts_backend(config) if args.speak else None
     # Narration only matters if something will actually speak it; gated on
@@ -284,22 +312,18 @@ def main() -> None:
     node_events: list[dict] = []  # a running log of create/re-associate/merge/evict, for World Memory's event log
 
     timeline = []
-    prev_pose = None
-    wearer_velocity = np.zeros(3)
+    wearer_motion = WearerMotion(world_down=world_down)
     total_detections = total_lifted = 0
     seen_node_ids: set[int] = set()
-    last_spoken_t: float | None = None
-    last_spoken_was_critical = False
+    speech = SpeechPolicy()
 
     for i, frame in enumerate(frames):
         detections = segmenter.step(frame)
         total_detections += len(detections)
 
-        if prev_pose is not None:
-            dt = frame.pose.timestamp - prev_pose.timestamp
-            if dt > 0:
-                wearer_velocity = finite_difference_velocity(prev_pose.t_world_cam, frame.pose.t_world_cam, dt)
-        prev_pose = frame.pose
+        wearer_velocity, wearer_heading = wearer_motion.update(
+            frame.timestamp, frame.pose.t_world_cam, camera_forward_world=frame.pose.R_world_cam[:, 2]
+        )
 
         instances = []
         for det in detections:
@@ -337,38 +361,36 @@ def main() -> None:
                 )
         graph.step(frame.timestamp)
 
-        edges = graph.edges(frame.pose.t_world_cam, wearer_velocity)
+        edges = graph.edges(frame.pose.t_world_cam, wearer_velocity, wearer_heading, t=frame.timestamp)
 
-        # Pick at most one edge to actually speak this frame (see
-        # DIRECTIVE_COOLDOWN_S's comment above) -- every edge still gets a
-        # directive string and a record either way, for the dashboard's own
-        # display of full tracked state, but only the elected one gets an
-        # audio clip attached.
-        most_urgent = _most_urgent_edge(edges)
-        speak_node_id = None
-        if most_urgent is not None:
-            now_critical = is_critical(most_urgent)
-            elapsed = float("inf") if last_spoken_t is None else frame.timestamp - last_spoken_t
-            cooldown = CRITICAL_COOLDOWN_S if now_critical else DIRECTIVE_COOLDOWN_S
-            escalating = now_critical and not last_spoken_was_critical
-            if last_spoken_t is None or escalating or elapsed >= cooldown:
-                speak_node_id = most_urgent.dst_node_id
-                last_spoken_t = frame.timestamp
-                last_spoken_was_critical = now_critical
+        # At most one edge is spoken per frame, and only when it's news and
+        # the channel is free (see locus.actuation.speech_policy). Every
+        # edge still gets a directive string and a record either way, for
+        # the dashboard's own display of full tracked state, but only the
+        # elected one gets an audio clip attached.
+        speak_node_id = speech.select(edges, frame.timestamp)
 
         edge_records = []
         for edge in edges:
             node = graph.nodes[edge.dst_node_id]
             # The warm, narrated voice only ever applies to the one edge
-            # actually chosen to speak this frame, and only when it isn't
-            # critical -- an imminent hazard always gets the fast, local,
-            # no-API-call describe() path instead, deliberately, regardless
-            # of whether narrator is available. Every other (non-spoken)
+            # actually chosen to speak this frame, and only for a routine
+            # (advisory) mention -- anything on a collision course always
+            # gets the short, local, no-API-call describe() path instead,
+            # deliberately: a narrated sentence takes ~1s longer to speak,
+            # and an approaching object's lead time can't spare it. The
+            # severity used is the speech policy's (after its critical
+            # hold), so the timeline/HUD agree with the audio. Every other (non-spoken)
             # edge also uses describe() here, purely as cheap display text
             # for the UI's tables -- not worth an API call for something
             # that's never actually going to be spoken.
-            if narrator is not None and edge.dst_node_id == speak_node_id and not is_critical(edge):
-                directive = narrator.narrate(node.concept, edge)
+            edge_severity = speech.severities[edge.dst_node_id]
+            if narrator is not None and edge.dst_node_id == speak_node_id and edge_severity == "advisory":
+                speed = (
+                    float(np.linalg.norm(horizontal(node.velocity_world, world_down)))
+                    if graph.velocity_measured(edge.dst_node_id) else None
+                )
+                directive = narrator.narrate(node.concept, edge, object_speed_mps=speed)
             else:
                 directive = describe(node.concept, edge)
             audio = None
@@ -385,6 +407,9 @@ def main() -> None:
                     "range_m": round(edge.range_m, 2),
                     "bearing_deg": round(float(np.degrees(edge.bearing_rad)), 1),
                     "ttc_s": round(edge.ttc_s, 2) if edge.ttc_s is not None else None,
+                    "cpa_m": round(edge.cpa_m, 2) if edge.cpa_m is not None else None,
+                    "severity": edge_severity,
+                    "spoken": edge.dst_node_id == speak_node_id,
                     "confidence": round(node.confidence, 2),
                     "directive": directive,
                     "audio": audio,
@@ -430,6 +455,7 @@ def main() -> None:
                 "t": round(frame.timestamp, 3),
                 "wearer_pos": [round(float(v), 3) for v in frame.pose.t_world_cam],
                 "wearer_velocity": [round(float(v), 3) for v in wearer_velocity],
+                "wearer_heading": None if wearer_heading is None else [round(float(v), 4) for v in wearer_heading],
                 "camera_R_world_cam": [[round(float(v), 4) for v in row] for row in frame.pose.R_world_cam],
                 "n_detections_this_frame": len(detections),
                 "edges": edge_records,
@@ -451,6 +477,7 @@ def main() -> None:
         "n_frames": len(frames),
         "concepts": concepts,
         "edge_radius_m": args.edge_radius_m,
+        "world_down": [float(v) for v in world_down],
         "total_detections": total_detections,
         "total_lifted": total_lifted,
         "final_summary": graph.summary(),

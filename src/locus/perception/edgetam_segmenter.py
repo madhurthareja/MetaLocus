@@ -1,45 +1,38 @@
 """EdgeTAM -- Meta's distilled, on-device SAM 2 -- as a genuinely streaming
-Segmenter backend, for the real-time path discussed against SAM 3.1 Object
-Multiplex (see sam3_native.py's module docstring for that one's batch
-constraint). Unlike Sam31NativeSegmenter, step() here does real per-frame
-model work: `EdgeTamVideoModel.forward(..., frame=pixel_tensor)` registers
-the new frame and runs causal inference on it immediately, with no
-look-ahead and no materialized frame directory. That's what makes it the
-actual candidate for live glasses hardware, at the cost of lower accuracy
-and no occlusion re-identification (confirmed in prior research: 16 FPS on
-an iPhone 15 Pro Max, vs. SAM 3.1's datacenter-GPU-only batch design).
+Segmenter backend, for the real-time path (see sam3_native.py's module
+docstring for SAM 3.1 Object Multiplex's batch constraint). Unlike
+Sam31NativeSegmenter, step() here does real per-frame model work:
+`EdgeTamVideoModel.forward(..., frame=pixel_tensor)` registers the new
+frame and runs causal inference on it immediately, with no look-ahead
+and no materialized frame directory -- the actual candidate for live
+glasses hardware, at the cost of lower accuracy and no occlusion
+re-identification versus SAM 3.1's batch design.
 
 Loaded via Hugging Face Transformers, not Meta's own EdgeTAM repo --
 `yonigozlan/EdgeTAM-hf` is a native `transformers` port (model_type
-"edgetam_video", 56MB checkpoint) sharing SAM 2's `Sam2VideoProcessor`;
-confirmed against the actual installed package, not assumed.
+"edgetam_video") sharing SAM 2's `Sam2VideoProcessor`.
 
-The one real architectural mismatch with the Segmenter protocol's
-text-concept interface: EdgeTAM is SAM 2 lineage -- point/box/mask prompts
-only, no open-vocabulary text grounding. Something still has to turn a
-Spark-proposed concept string into an initial box before EdgeTAM can track
-it. That's `grounder`: a `(concept, frame) -> box_xywh_norm | None`
-callable, defaulting to `Sam31NativeSegmenter.ground_text` (one cheap
-add_prompt call, no propagation) lazily built on first use so a caller who
-supplies their own grounder never pays for loading SAM 3.1 at all.
+EdgeTAM is SAM 2 lineage: point/box/mask prompts only, no open-vocabulary
+text grounding. Something still has to turn a Spark-proposed concept
+string into an initial box before EdgeTAM can track it -- that's
+`grounder`, a `(concept, frame) -> box_xywh_norm | None` callable,
+defaulting to `Sam31NativeSegmenter.ground_text` (one cheap add_prompt
+call, no propagation), lazily built on first use so a caller supplying
+their own grounder never pays for loading SAM 3.1 at all.
 
 v1 scope: one tracked instance per concept (first grounder match only).
 Multi-instance-per-concept would need the grounder to return multiple
-boxes and this class to mint one obj_id per box -- real extension, not
-done here.
+boxes and this class to mint one obj_id per box.
 
 Periodic re-grounding (`reground_interval`): a causal tracker with no
-reverse pass drifts over a long clip with nothing to correct it -- measured
-on a real 539-frame (36s) SANPO run, this project's own tracked node count
-fell from 11 live mid-clip to 2 by the end, vs. SAM 3.1's batch pass
-holding ~84 steady. Every `reground_interval` frames, each already-tracked
-concept gets one fresh SAM 3.1 box call on the *current* frame, re-injected
-for its existing obj_id -- this lands on a frame_idx the session has never
-seen before, so it's treated as a fresh conditioning frame automatically
-(no special-casing needed; see step()'s comment). A transient miss (object
-briefly occluded) is not treated as "gone" -- the existing track is left
-alone and retried at the next interval, rather than dropping the object on
-one failed look.
+reverse pass drifts over a long clip with nothing to correct it. Every
+`reground_interval` frames, each already-tracked concept gets one fresh
+SAM 3.1 box call on the *current* frame, re-injected for its existing
+obj_id -- this lands on a frame_idx the session has never seen before, so
+it's treated as a fresh conditioning frame automatically (see step()'s
+comment). A transient miss (object briefly occluded) is not treated as
+"gone": the existing track is left alone and retried at the next
+interval, rather than dropping the object on one failed look.
 """
 
 from __future__ import annotations
@@ -81,18 +74,15 @@ class EdgeTamSegmenter:
         self._grounder = grounder
         # A concept not yet visible should keep getting looked for (it may
         # enter frame later), not be given up on after one miss -- but
-        # looking means a full SAM 3.1 session, so retrying every single
-        # frame forever is a real cost bug, not just inefficiency: a
-        # concept Spark proposed but that's simply never in this clip pays
-        # for one SAM 3.1 session per frame for the rest of the video
-        # (confirmed empirically -- 687 grounding attempts for 10 concepts
-        # across one 539-frame run). Rate-limit retries instead of removing
-        # them.
+        # looking means a full SAM 3.1 session, so retrying every frame
+        # forever is a real cost bug: a concept that's simply never in
+        # this clip would pay for one SAM 3.1 session per frame for the
+        # rest of the video. Rate-limit retries instead of removing them.
         self._ground_retry_interval = ground_retry_interval
         # None disables drift correction entirely -- a fixed interval, not
         # confidence-triggered, because object_score_logits dipping is a
-        # normal, honest signal (seen as low as 0.63 on a perfectly-tracked
-        # object in testing), not a reliable "this has drifted" flag.
+        # normal signal even on a well-tracked object, not a reliable
+        # "this has drifted" flag.
         self._reground_interval = reground_interval
         self._model = None
         self._processor = None
@@ -157,10 +147,7 @@ class EdgeTamSegmenter:
         # add_inputs_to_inference_session() call: that method *overwrites*
         # (not appends to) inference_session.obj_with_new_inputs, so calling
         # it once per concept would silently drop every earlier object's
-        # "has new inputs" flag for this frame and crash inside forward()
-        # (confirmed empirically -- "maskmem_features ... cannot be empty
-        # when not is_initial_conditioning_frame" the first time two
-        # concepts grounded on the same frame).
+        # "has new inputs" flag for this frame and crash inside forward().
         update_obj_ids = []
         update_boxes_xyxy = []
         grounder = self._default_grounder()

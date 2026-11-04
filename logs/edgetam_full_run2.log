@@ -1,152 +1,0 @@
-[transformers] `memory_attention_rope_theta` is deprecated and will be removed in v5.0. Use `rope_parameters['rope_theta']` instead.
-[1/7] Loading FULL SANPO session '-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG'...
-      539 frames @ 15.0fps = 35.9s
-      prefetching all RGB+depth files in parallel (16 workers)...
-      mean depth coverage: 92.1% of pixels
-[2/7] Proposing concepts from the first frame (Meta Model API, muse-spark-1.3)...
-      Spark proposed: ['pole', 'tree', 'van', 'truck', 'fire hydrant', 'trash bin']
-[3/7] Running EdgeTAM (causal/streaming, no look-ahead) on 6 concepts across all 539 frames -- grounded via one-shot SAM 3.1 text->box calls as each concept is first encountered...
-Loading weights:   0%|          | 0/984 [00:00<?, ?it/s]Loading weights:  77%|███████▋  | 761/984 [00:00<00:00, 7578.80it/s]Loading weights: 100%|██████████| 984/984 [00:00<00:00, 7683.76it/s]
-/home/madhur/miniconda3/envs/hackathon/lib/python3.12/site-packages/torch/cuda/__init__.py:435: UserWarning: 
-    Found GPU0 NVIDIA GB10 which is of cuda capability 12.1.
-    Minimum and Maximum cuda capability supported by this version of PyTorch is
-    (8.0) - (12.0)
-    
-  queued_call()
-/home/iairo-dgx1/vision_datasets/hackathon/repos/sam3/sam3/model_builder.py:8: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
-  import pkg_resources
-/home/madhur/miniconda3/envs/hackathon/lib/python3.12/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
-  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
-[0m[32mINFO 2026-11-02 07:38:31,675 1928646 sam3_multiplex_base.py: 337:[0m `setting max_num_objects` to 16 -- creating num_obj_for_compile=1 objects for torch.compile cache
-[3b/7] Re-checking for new concepts at 3 later checkpoints...
-       widened vocabulary with ['person', 'car'] at t=9.0s (frame 135)
-       widened vocabulary with ['traffic light'] at t=18.0s (frame 270)
-       widened vocabulary with ['taxi', 'street lamp'] at t=26.9s (frame 404)
-[4/7] Lifting detections, feeding the persistent memory graph, rendering per-frame output...
-dynamic_multimask_via_stability is reset to False in the multiplex model
-Missing keys (64): ['detector.backbone.vision_backbone.trunk.blocks.0.attn.freqs_cis_real', 'detector.backbone.vision_backbone.trunk.blocks.0.attn.freqs_cis_imag', 'detector.backbone.vision_backbone.trunk.blocks.1.attn.freqs_cis_real', 'detector.backbone.vision_backbone.trunk.blocks.1.attn.freqs_cis_imag', 'detector.backbone.vision_backbone.trunk.blocks.2.attn.freqs_cis_real', 'detector.backbone.vision_backbone.trunk.blocks.2.attn.freqs_cis_imag', 'detector.backbone.vision_backbone.trunk.blocks.3.attn.freqs_cis_real', 'detector.backbone.vision_backbone.trunk.blocks.3.attn.freqs_cis_imag', 'detector.backbone.vision_backbone.trunk.blocks.4.attn.freqs_cis_real', 'detector.backbone.vision_backbone.trunk.blocks.4.attn.freqs_cis_imag']...
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 13.31it/s]
-[0m[32mINFO 2026-11-02 07:38:53,147 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:38:58,337 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 1156775936 bytes (free_pct 1.9% -> 2.7%, reserved 6771703808 -> 5622464512 bytes)
-[0m[32mINFO 2026-11-02 07:38:58,337 1928646 sam3_base_predictor.py: 467:[0m removed session 56dc87bf-2707-4c6b-921d-45871306f952
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 39.24it/s]
-[0m[32mINFO 2026-11-02 07:38:58,377 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:39:00,826 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 1004371968 bytes (free_pct 1.9% -> 2.7%, reserved 6620708864 -> 5622464512 bytes)
-[0m[32mINFO 2026-11-02 07:39:00,826 1928646 sam3_base_predictor.py: 467:[0m removed session a8300305-d647-4332-b60c-c1a239e5e16f
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 34.71it/s]
-[0m[32mINFO 2026-11-02 07:39:00,886 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:39:03,544 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 1012494336 bytes (free_pct 1.9% -> 2.7%, reserved 6620708864 -> 5622464512 bytes)
-[0m[32mINFO 2026-11-02 07:39:03,544 1928646 sam3_base_predictor.py: 467:[0m removed session 4cabf282-8f87-4050-9571-b0db9b084942
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 49.05it/s]
-[0m[32mINFO 2026-11-02 07:39:03,582 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:39:06,288 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 1004613632 bytes (free_pct 1.9% -> 2.7%, reserved 6620708864 -> 5622464512 bytes)
-[0m[32mINFO 2026-11-02 07:39:06,288 1928646 sam3_base_predictor.py: 467:[0m removed session b80eaee0-e2f1-4945-87ef-9c2e48ac38d9
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 27.38it/s]
-[0m[32mINFO 2026-11-02 07:39:06,364 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:39:08,746 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 1004281856 bytes (free_pct 1.9% -> 2.7%, reserved 6620708864 -> 5622464512 bytes)
-[0m[32mINFO 2026-11-02 07:39:08,746 1928646 sam3_base_predictor.py: 467:[0m removed session 53dfabd8-35e7-4468-aece-5c5404e947a7
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 47.67it/s]
-[0m[32mINFO 2026-11-02 07:39:08,784 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:39:11,437 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 1004732416 bytes (free_pct 1.9% -> 2.7%, reserved 6620708864 -> 5622464512 bytes)
-[0m[32mINFO 2026-11-02 07:39:11,437 1928646 sam3_base_predictor.py: 467:[0m removed session 284167f8-33ad-4bcf-9d06-b6a97d6b1de1
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 27.46it/s]
-[0m[32mINFO 2026-11-02 07:39:11,512 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:39:13,785 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 700788736 bytes (free_pct 2.2% -> 2.7%, reserved 6318718976 -> 5622464512 bytes)
-[0m[32mINFO 2026-11-02 07:39:13,785 1928646 sam3_base_predictor.py: 467:[0m removed session 3ef3352e-c6b3-4d7f-919d-5aea0f320f5b
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 51.98it/s]
-[0m[32mINFO 2026-11-02 07:39:13,817 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:39:16,504 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 1011109888 bytes (free_pct 1.9% -> 2.7%, reserved 6620708864 -> 5622464512 bytes)
-[0m[32mINFO 2026-11-02 07:39:16,505 1928646 sam3_base_predictor.py: 467:[0m removed session 6017aa1a-034e-4994-9d02-e62cddc0c874
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 29.10it/s]
-[0m[32mINFO 2026-11-02 07:39:16,576 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:39:18,857 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 700973056 bytes (free_pct 2.2% -> 2.7%, reserved 6318718976 -> 5622464512 bytes)
-[0m[32mINFO 2026-11-02 07:39:18,858 1928646 sam3_base_predictor.py: 467:[0m removed session 093ef8ac-08f1-4b0f-9540-546683d88110
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 51.03it/s]
-[0m[32mINFO 2026-11-02 07:39:18,891 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:39:21,429 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 701169664 bytes (free_pct 2.2% -> 2.7%, reserved 6318718976 -> 5622464512 bytes)
-[0m[32mINFO 2026-11-02 07:39:21,429 1928646 sam3_base_predictor.py: 467:[0m removed session d941dd07-7fe4-409d-9c1b-785aca1cad98
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 33.98it/s]
-[0m[32mINFO 2026-11-02 07:39:21,485 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:39:23,930 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 1004613632 bytes (free_pct 1.9% -> 2.7%, reserved 6620708864 -> 5622464512 bytes)
-[0m[32mINFO 2026-11-02 07:39:23,930 1928646 sam3_base_predictor.py: 467:[0m removed session 50dea8a3-2a33-465c-8799-0ef1c96dcdaf
-[transformers] Instantiating a decoder SeamlessM4Tv2Attention without passing `layer_idx` is not recommended and will lead to errors during the forward call, if caching is used. Please make sure to provide a `layer_idx` when creating this class.
-Loading weights:   0%|          | 0/2232 [00:00<?, ?it/s]Loading weights:   1%|          | 21/2232 [00:01<01:52, 19.59it/s]Loading weights:   1%|▏         | 31/2232 [00:01<01:34, 23.41it/s]Loading weights:   3%|▎         | 56/2232 [00:01<00:43, 50.42it/s]Loading weights:   3%|▎         | 69/2232 [00:02<01:13, 29.53it/s]Loading weights:   4%|▎         | 83/2232 [00:02<01:18, 27.51it/s]Loading weights:   5%|▍         | 104/2232 [00:03<00:56, 37.84it/s]Loading weights:   6%|▌         | 127/2232 [00:03<00:48, 43.45it/s]Loading weights:   6%|▌         | 134/2232 [00:03<00:47, 44.12it/s]Loading weights:   7%|▋         | 166/2232 [00:03<00:27, 75.38it/s]Loading weights:   8%|▊         | 180/2232 [00:04<00:33, 61.24it/s]Loading weights:   9%|▉         | 198/2232 [00:04<00:35, 56.92it/s]Loading weights:   9%|▉         | 207/2232 [00:05<00:51, 39.13it/s]Loading weights:  12%|█▏        | 260/2232 [00:05<00:22, 87.28it/s]Loading weights:  13%|█▎        | 281/2232 [00:05<00:25, 75.35it/s]Loading weights:  14%|█▍        | 307/2232 [00:05<00:19, 96.50it/s]Loading weights:  16%|█▌        | 356/2232 [00:05<00:13, 143.56it/s]Loading weights:  17%|█▋        | 380/2232 [00:06<00:16, 109.30it/s]Loading weights:  18%|█▊        | 399/2232 [00:06<00:27, 66.08it/s] Loading weights:  19%|█▊        | 418/2232 [00:07<00:32, 55.84it/s]Loading weights:  23%|██▎       | 516/2232 [00:08<00:19, 88.91it/s]Loading weights:  24%|██▍       | 533/2232 [00:08<00:18, 91.51it/s]Loading weights:  24%|██▍       | 546/2232 [00:11<01:00, 27.79it/s]Loading weights:  29%|██▊       | 639/2232 [00:11<00:25, 61.32it/s]Loading weights:  30%|██▉       | 667/2232 [00:12<00:32, 47.89it/s]Loading weights:  32%|███▏      | 708/2232 [00:13<00:35, 42.78it/s]Loading weights:  32%|███▏      | 723/2232 [00:13<00:33, 44.57it/s]Loading weights:  33%|███▎      | 740/2232 [00:14<00:32, 45.68it/s]Loading weights:  36%|███▌      | 803/2232 [00:14<00:21, 66.05it/s]Loading weights:  36%|███▋      | 814/2232 [00:14<00:24, 57.15it/s]Loading weights:  40%|███▉      | 891/2232 [00:17<00:36, 36.49it/s]Loading weights:  42%|████▏     | 935/2232 [00:18<00:32, 40.30it/s]Loading weights:  42%|████▏     | 947/2232 [00:19<00:37, 34.40it/s]Loading weights:  47%|████▋     | 1059/2232 [00:20<00:18, 62.94it/s]Loading weights:  48%|████▊     | 1069/2232 [00:20<00:19, 59.86it/s]Loading weights:  48%|████▊     | 1076/2232 [00:21<00:30, 37.98it/s]Loading weights:  55%|█████▌    | 1229/2232 [00:22<00:11, 84.33it/s]Loading weights:  57%|█████▋    | 1277/2232 [00:23<00:12, 77.87it/s]Loading weights:  59%|█████▉    | 1321/2232 [00:25<00:19, 46.59it/s]Loading weights:  63%|██████▎   | 1397/2232 [00:26<00:16, 50.97it/s]Loading weights:  66%|██████▌   | 1465/2232 [00:26<00:11, 64.32it/s]Loading weights:  72%|███████▏  | 1611/2232 [00:27<00:05, 121.45it/s]Loading weights:  78%|███████▊  | 1751/2232 [00:27<00:02, 187.48it/s]Loading weights:  87%|████████▋ | 1931/2232 [00:27<00:01, 300.66it/s]Loading weights:  91%|█████████ | 2027/2232 [00:27<00:00, 360.54it/s]Loading weights: 100%|██████████| 2232/2232 [00:27<00:00, 81.35it/s] 
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 22.00it/s]
-[0m[32mINFO 2026-11-02 07:41:37,679 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:41:40,138 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 713035776 bytes (free_pct 1.3% -> 1.9%, reserved 11221860352 -> 10513022976 bytes)
-[0m[32mINFO 2026-11-02 07:41:40,138 1928646 sam3_base_predictor.py: 467:[0m removed session 71a71b41-60ef-445c-a5bb-af7adde842ae
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 51.97it/s]
-[0m[32mINFO 2026-11-02 07:41:40,172 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:41:42,670 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 841220096 bytes (free_pct 1.2% -> 1.9%, reserved 11347689472 -> 10513022976 bytes)
-[0m[32mINFO 2026-11-02 07:41:42,670 1928646 sam3_base_predictor.py: 467:[0m removed session 8e47ad48-a5e3-4dd1-9088-2b8066491395
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 31.75it/s]
-[0m[32mINFO 2026-11-02 07:41:42,719 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:41:45,165 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 840839168 bytes (free_pct 1.2% -> 1.9%, reserved 11347689472 -> 10513022976 bytes)
-[0m[32mINFO 2026-11-02 07:41:45,165 1928646 sam3_base_predictor.py: 467:[0m removed session 33ddeab0-3647-433e-a40a-ceb2971f4d7f
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 39.70it/s]
-[0m[32mINFO 2026-11-02 07:42:34,861 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:42:37,554 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 1047539712 bytes (free_pct 1.2% -> 2.0%, reserved 11723079680 -> 10680795136 bytes)
-[0m[32mINFO 2026-11-02 07:42:37,555 1928646 sam3_base_predictor.py: 467:[0m removed session 805a8f91-742c-4926-bc9a-66c246271dbc
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 41.55it/s]
-[0m[32mINFO 2026-11-02 07:42:37,611 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:42:40,159 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 747208704 bytes (free_pct 1.4% -> 1.9%, reserved 11416895488 -> 10680795136 bytes)
-[0m[32mINFO 2026-11-02 07:42:40,159 1928646 sam3_base_predictor.py: 467:[0m removed session b11aab0c-e033-4dda-824b-1f3d611294dd
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 38.16it/s]
-[0m[32mINFO 2026-11-02 07:42:40,202 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:42:42,845 1928646 sam3_base_predictor.py: 456:[0m empty_cache freed 741408768 bytes (free_pct 1.3% -> 1.9%, reserved 11416895488 -> 10680795136 bytes)
-[0m[32mINFO 2026-11-02 07:42:42,845 1928646 sam3_base_predictor.py: 467:[0m removed session c4fcd783-45f6-4c65-ab72-bad3e96ea1e3
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 48.40it/s]
-[0m[32mINFO 2026-11-02 07:43:10,986 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:43:12,438 1928646 sam3_base_predictor.py: 467:[0m removed session 502b60ac-ad12-4529-a059-62b9b679b1c1
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 52.95it/s]
-[0m[32mINFO 2026-11-02 07:43:12,468 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:43:13,434 1928646 sam3_base_predictor.py: 467:[0m removed session c7ae2530-1729-41de-8835-d6dd19aeae52
-      50/539 frames processed, 9 nodes live
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 48.18it/s]
-[0m[32mINFO 2026-11-02 07:43:28,623 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:43:29,712 1928646 sam3_base_predictor.py: 467:[0m removed session 60a2d91f-2039-417b-8045-cfc110115a12
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 50.25it/s]
-[0m[32mINFO 2026-11-02 07:43:29,743 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:43:30,720 1928646 sam3_base_predictor.py: 467:[0m removed session c435104a-73d4-492b-b3f0-13ea7ab4cc60
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 42.68it/s]
-[0m[32mINFO 2026-11-02 07:43:45,676 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:43:46,939 1928646 sam3_base_predictor.py: 467:[0m removed session b885dbbf-9230-4355-8834-0ee62264f92d
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 48.65it/s]
-[0m[32mINFO 2026-11-02 07:43:46,971 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:43:48,223 1928646 sam3_base_predictor.py: 467:[0m removed session ba0a7553-10e2-49df-b3ee-2a1404747b76
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 44.34it/s]
-[0m[32mINFO 2026-11-02 07:43:59,794 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:44:01,072 1928646 sam3_base_predictor.py: 467:[0m removed session d4971b1b-c13e-4bc4-a446-9cfbc75480f5
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 50.05it/s]
-[0m[32mINFO 2026-11-02 07:44:01,102 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:44:02,374 1928646 sam3_base_predictor.py: 467:[0m removed session e2a39239-1b63-46a4-8bbe-0802327c477f
-      100/539 frames processed, 9 nodes live
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 54.26it/s]
-[0m[32mINFO 2026-11-02 07:44:09,384 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:44:10,350 1928646 sam3_base_predictor.py: 467:[0m removed session e61e00e9-7ef2-4c2b-870b-d4d628b0fe15
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 57.33it/s]
-[0m[32mINFO 2026-11-02 07:44:10,377 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:44:11,346 1928646 sam3_base_predictor.py: 467:[0m removed session d8884752-3330-4991-b249-3d777eb7bd57
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 47.49it/s]
-[0m[32mINFO 2026-11-02 07:44:19,419 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:44:20,401 1928646 sam3_base_predictor.py: 467:[0m removed session 686309f8-7c91-4659-b136-1514ae2a8ee0
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 49.37it/s]
-[0m[32mINFO 2026-11-02 07:44:20,433 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:44:21,474 1928646 sam3_base_predictor.py: 467:[0m removed session f61e3769-cb5a-4217-a49c-cfffca36ea6d
-frame loading (image folder) [rank=0]:   0%|          | 0/1 [00:00<?, ?it/s]frame loading (image folder) [rank=0]: 100%|██████████| 1/1 [00:00<00:00, 45.18it/s]
-[0m[32mINFO 2026-11-02 07:44:29,546 1928646 sam3_multiplex_tracking.py:1677:[0m Running add_prompt on frame 0
-[0m[32mINFO 2026-11-02 07:44:30,858 1928646 sam3_base_predictor.py: 467:[0m removed session 0469da11-8369-4111-afd1-d3fcd3211232
-      150/539 frames processed, 11 nodes live
-      200/539 frames processed, 11 nodes live
-      250/539 frames processed, 11 nodes live
-      300/539 frames processed, 11 nodes live
-      350/539 frames processed, 4 nodes live
-      400/539 frames processed, 4 nodes live
-      450/539 frames processed, 2 nodes live
-      500/539 frames processed, 2 nodes live
-      539/539 frames processed, 2 nodes live
-[5/7] Writing timeline.json...
-[6/7] Encoding frames.mp4 / masks.mp4...
-[7/7] Done. Wrote 539 frame/mask pairs, 135 unique spoken clips to dashboard/data/sanpo_edgetam_live_demo
-      Total raw detections: 5644, lifted to 3D: 776
-      Final graph: {'n_nodes': 2, 'concepts_live': ['traffic light'], 'concepts_decaying': ['taxi']}

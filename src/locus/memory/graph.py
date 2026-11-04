@@ -1,26 +1,36 @@
-"""The spatial memory graph: the actual contribution of this project.
+"""Persistent 3D spatial memory graph.
 
-Persistence is the whole point (section 7.3 of the spec this was built
-against): when an instance stops being observed, the node is NOT
-deleted. Its last known world position is kept (correct forever for a
-static object -- that's exactly why the world frame, not the camera
-frame, is where state lives), its confidence decays by half-life, and it
-is only evicted after a configured timeout with no observation.
+When an instance stops being observed, its node is not deleted: its last
+known world position is kept (which is why state lives in the world
+frame, not the camera frame), confidence decays by half-life, and the
+node is evicted only after a configured timeout with no observation.
 """
 
 from __future__ import annotations
 
+from collections import deque
+
 import numpy as np
 
-from locus.geometry.frames import world_to_ego
+from locus.geometry.frames import WORLD_DOWN_DEFAULT, world_to_ego
 from locus.geometry.intrinsics import Intrinsics
 from locus.memory.decay import decayed_confidence
 from locus.memory.edges import compute_edges
+from locus.memory.motion_classes import MOVABLE, STATIC, max_speed_mps, motion_class
 from locus.memory.node import NodeIdAllocator
 from locus.types import Edge, Instance3D, Node, Pose
 
 ASSOCIATION_GATE_M = 1.0
 VELOCITY_SMOOTHING_ALPHA = 0.3
+# Movable things are only trustworthy while seen (see motion_classes.py):
+# they fade and get evicted on a seconds scale, not the static default's.
+MOVABLE_DECAY_HALF_LIFE_S = 1.0
+MOVABLE_EVICTION_S = 4.0
+# Mover velocity is a line fit over at most this much of the current track
+# segment, reported only once the segment is long enough to mean anything.
+MOVER_VELOCITY_WINDOW_S = 1.0
+MOVER_VELOCITY_MIN_SPAN_S = 0.4
+MOVER_VELOCITY_MIN_OBSERVATIONS = 5
 
 
 class SpatialMemoryGraph:
@@ -30,15 +40,23 @@ class SpatialMemoryGraph:
         node_eviction_seconds: float = 20.0,
         edge_radius_m: float = 4.0,
         association_gate_m: float = ASSOCIATION_GATE_M,
+        world_down: np.ndarray = WORLD_DOWN_DEFAULT,
+        movable_decay_half_life_seconds: float = MOVABLE_DECAY_HALF_LIFE_S,
+        movable_eviction_seconds: float = MOVABLE_EVICTION_S,
     ):
         self.node_decay_half_life_seconds = node_decay_half_life_seconds
         self.node_eviction_seconds = node_eviction_seconds
         self.edge_radius_m = edge_radius_m
         self.association_gate_m = association_gate_m
+        self.world_down = np.asarray(world_down, dtype=float)
+        self.movable_decay_half_life_seconds = movable_decay_half_life_seconds
+        self.movable_eviction_seconds = movable_eviction_seconds
 
         self.nodes: dict[int, Node] = {}
         self._instance_to_node: dict[int, int] = {}  # segmenter instance_id -> node_id
         self._allocator = NodeIdAllocator()
+        self._mover_tracks: dict[int, deque[tuple[float, np.ndarray]]] = {}  # node_id -> (t, p_world)
+        self._mover_velocity_ready: dict[int, bool] = {}
 
     def _find_spatial_match(self, instance: Instance3D) -> int | None:
         best_id, best_dist = None, self.association_gate_m
@@ -71,27 +89,21 @@ class SpatialMemoryGraph:
             else:
                 node = self.nodes[node_id]
                 dt = t - node.last_seen
-                if dt > 0:
-                    # Exponential smoothing, not a raw single-step finite
-                    # difference -- a raw sample amplifies ordinary mask/
-                    # depth-lifting jitter into large spurious velocities for
-                    # genuinely static objects. Measured on the real SANPO
-                    # session: a static "pole" node's raw finite-difference
-                    # velocity swung between 1.4-2.9 m/s frame to frame on
-                    # pure lifting noise, then froze at a noisy 5.3 m/s once
-                    # the node stopped being re-observed (velocity is only
-                    # updated here, so one bad sample stays load-bearing for
-                    # as long as the node is remembered). compute_edges()
-                    # then read that stale/noisy velocity as real motion,
-                    # producing "critical" hazard alerts for poles sitting
-                    # directly to the side of the wearer's path (median
-                    # bearing ~87 degrees on the false-critical edges) --
-                    # not a threshold-tuning problem, a noise-amplification
-                    # one. VELOCITY_SMOOTHING_ALPHA=0.3 keeps a few frames of
-                    # inertia so one noisy sample can't fully determine the
-                    # estimate, while still converging to real sustained
-                    # motion (an actually-closing vehicle) within ~3-4
-                    # observations.
+                kind = motion_class(node.concept)
+                if kind == STATIC:
+                    # Pinned, not smoothed: see motion_classes.py for the
+                    # measured noise this replaces.
+                    node.velocity_world = np.zeros(3)
+                elif kind == MOVABLE:
+                    if dt > 0:
+                        self._update_mover_velocity(node, instance.p_world, t, dt)
+                elif dt > 0:
+                    # Exponential smoothing rather than a raw finite
+                    # difference: mask/depth-lifting jitter would otherwise
+                    # read as real velocity for an unclassified concept, and
+                    # since a node's velocity is only updated here, one bad
+                    # sample stays load-bearing for as long as the node is
+                    # remembered.
                     instantaneous_v = (instance.p_world - node.p_world) / dt
                     node.velocity_world = (
                         VELOCITY_SMOOTHING_ALPHA * instantaneous_v
@@ -108,17 +120,50 @@ class SpatialMemoryGraph:
 
         self._merge_duplicate_nodes()
 
+    def _update_mover_velocity(self, node: Node, p_world: np.ndarray, t: float, dt: float) -> None:
+        """Velocity for a movable node: the least-squares slope of its
+        current consistent track segment, or zero until there is enough of
+        one. A segmenter can hand one instance id to a different physical
+        object (e.g. a tracker re-anchoring); a step faster than the class
+        can move is treated as that kind of jump rather than motion and
+        starts a new segment at zero velocity, so a stale/noisy estimate
+        never carries over onto whatever the id lands on next. A line fit
+        over the segment, instead of smoothed per-frame differences, keeps
+        depth jitter from reading as speed."""
+        track = self._mover_tracks.setdefault(node.node_id, deque([(node.last_seen, node.p_world.copy())]))
+        if np.linalg.norm(p_world - node.p_world) / dt > max_speed_mps(node.concept):
+            track.clear()
+        track.append((t, p_world.copy()))
+        while t - track[0][0] > MOVER_VELOCITY_WINDOW_S:
+            track.popleft()
+
+        ts = np.array([sample[0] for sample in track])
+        ready = len(track) >= MOVER_VELOCITY_MIN_OBSERVATIONS and ts[-1] - ts[0] >= MOVER_VELOCITY_MIN_SPAN_S
+        self._mover_velocity_ready[node.node_id] = ready
+        if not ready:
+            node.velocity_world = np.zeros(3)
+            return
+        ps = np.array([sample[1] for sample in track])
+        tc = ts - ts.mean()
+        node.velocity_world = (tc[:, None] * (ps - ps.mean(axis=0))).sum(axis=0) / (tc**2).sum()
+
+    def velocity_measured(self, node_id: int) -> bool:
+        """False while a movable node's zero velocity means "not measured
+        yet" (track segment too short) rather than "not moving" -- the
+        difference between "a bicycle" and "a stopped bicycle"."""
+        if motion_class(self.nodes[node_id].concept) != MOVABLE:
+            return True
+        return self._mover_velocity_ready.get(node_id, False)
+
     def _merge_duplicate_nodes(self) -> None:
-        """Two different instance_ids for the same physical object each get
+        """Two different instance_ids for the same physical object get
         their own node at creation time if they miss the association gate
-        then (noisy depth, or a segmenter tracker briefly emitting two
-        overlapping detections for one object before its own de-duplication
-        converges -- confirmed happening with SAM 3.1's multiplex tracker on
-        a short real clip). The gate is checked only once, at creation, so
-        two such nodes can keep existing side by side even after later
-        observations bring them within the gate of each other. This re-checks
-        every same-concept pair after each observe() and merges any that are
-        now within the gate, so a late-arriving duplicate still collapses."""
+        then (noisy depth, or a segmenter briefly emitting two overlapping
+        detections for one object before its own de-duplication converges).
+        The gate is only checked at creation, so such a pair can keep
+        existing side by side even after later observations bring them
+        within range of each other; this re-checks every same-concept pair
+        after each observe() and merges any that now qualify."""
         by_concept: dict[str, list[int]] = {}
         for node_id, node in self.nodes.items():
             by_concept.setdefault(node.concept, []).append(node_id)
@@ -156,6 +201,10 @@ class SpatialMemoryGraph:
             if node_id == drop:
                 self._instance_to_node[instance_id] = keep
         del self.nodes[drop]
+        # Two sources now feed one node; neither track segment describes it.
+        for node_id in (keep, drop):
+            self._mover_tracks.pop(node_id, None)
+            self._mover_velocity_ready.pop(node_id, None)
 
     def step(self, t: float) -> None:
         evicted = []
@@ -164,12 +213,17 @@ class SpatialMemoryGraph:
             if elapsed <= 0:
                 continue  # observed at or after t -- nothing to decay yet
             node.visible = False
-            node.confidence = decayed_confidence(elapsed, self.node_decay_half_life_seconds)
-            if elapsed > self.node_eviction_seconds:
+            movable = motion_class(node.concept) == MOVABLE
+            half_life = self.movable_decay_half_life_seconds if movable else self.node_decay_half_life_seconds
+            eviction = self.movable_eviction_seconds if movable else self.node_eviction_seconds
+            node.confidence = decayed_confidence(elapsed, half_life)
+            if elapsed > eviction:
                 evicted.append(node_id)
 
         for node_id in evicted:
             del self.nodes[node_id]
+            self._mover_tracks.pop(node_id, None)
+            self._mover_velocity_ready.pop(node_id, None)
             stale_instances = [k for k, v in self._instance_to_node.items() if v == node_id]
             for k in stale_instances:
                 del self._instance_to_node[k]
@@ -196,13 +250,20 @@ class SpatialMemoryGraph:
         return result
 
     def edges(
-        self, wearer_position_world: np.ndarray, wearer_velocity_world: np.ndarray
+        self,
+        wearer_position_world: np.ndarray,
+        wearer_velocity_world: np.ndarray,
+        wearer_heading_world: np.ndarray | None = None,
+        t: float | None = None,
     ) -> list[Edge]:
         return compute_edges(
             list(self.nodes.values()),
             wearer_position_world,
             wearer_velocity_world,
             self.edge_radius_m,
+            world_down=self.world_down,
+            wearer_heading_world=wearer_heading_world,
+            t=t,
         )
 
     def predict_reentry(

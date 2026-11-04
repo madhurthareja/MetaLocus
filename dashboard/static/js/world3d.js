@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { hazardSeverity } from './state.js';
 
 // The signature visualization: a persistent world-coordinate memory graph,
 // rendered so the difference between "currently observed", "remembered but
@@ -7,15 +8,14 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 // section 5.A -- this is deliberately not a static illustration: real
 // rotate/zoom/select, real per-node state driving color/opacity/geometry.
 //
-// Coordinate note: locus.geometry assumes world-up = +Y everywhere EXCEPT
-// the SANPO loader, which (per its own documented, still-open caveat --
-// see docs/UI.md System page / system_facts.json body_frame_validation)
-// currently treats world-up as +Z for that dataset specifically. Three.js
-// is Y-up, so SANPO positions get their Y/Z swapped on the way in; every
-// other dataset maps straight through. This keeps the ground plane
-// genuinely "down" instead of silently rendering sideways for SANPO.
+// Coordinate note: SANPO's world is right-handed and Z-up (measured -- see
+// sanpo_loader.py's rotation-convention note); Three.js is right-handed and
+// Y-up. (x, y, z) -> (x, z, -y) is the proper rotation between the two. A
+// plain Y/Z swap would be a reflection: the scene would render as the
+// mirror image of the real street, objects on the wearer's right drawn on
+// their left. Every other dataset maps straight through.
 function worldToThree(p, dataset, out = new THREE.Vector3()) {
-  if (dataset === 'sanpo') return out.set(p[0], p[2], p[1]);
+  if (dataset === 'sanpo') return out.set(p[0], p[2], -p[1]);
   return out.set(p[0], p[1], p[2]);
 }
 
@@ -377,7 +377,8 @@ export class WorldView {
     const isHovered = this.hoveredNodeId === node.node_id;
     const isStaleEstimate = !node.visible && node.confidence < STALE_CONFIDENCE_FOR_ESTIMATE;
     const edge = this.lastFrame?.edges.find((e) => e.node_id === node.node_id);
-    const sev = !edge || edge.ttc_s == null ? null : edge.ttc_s < 2 ? 'critical' : edge.ttc_s < 5 ? 'hazard' : null;
+    const edgeSev = hazardSeverity(edge);
+    const sev = edgeSev === 'critical' || edgeSev === 'hazard' ? edgeSev : null;
 
     let color = COLORS.visible;
     let opacity = 0.9;

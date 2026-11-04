@@ -17,7 +17,7 @@ import yaml
 ROOT = Path(__file__).parent.parent
 config = yaml.safe_load((ROOT / "config/default.yaml").read_text())
 
-sanpo_timeline_path = ROOT / "dashboard/data/sanpo_-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG/timeline.json"
+sanpo_timeline_path = ROOT / "dashboard/data/sanpo_scaffolding_sidewalk_to_crossing/timeline.json"
 sanpo_timeline = json.loads(sanpo_timeline_path.read_text()) if sanpo_timeline_path.exists() else None
 
 sam31_smoke_test_path = ROOT / "dashboard/data/sam31_smoke_test.json"
@@ -117,9 +117,9 @@ system_facts = {
         {"id": "lifting", "name": "Median-depth mask lifting", "status": "real",
          "detail": "lift() takes the median depth under a segmentation mask; lift_from_box() (condition C only) takes the median depth under the detection's bounding box instead."},
         {"id": "memory_graph", "name": "Persistent world-memory graph", "status": "real",
-         "detail": "SpatialMemoryGraph: temporal decay, eviction, spatial re-association, periodic duplicate-node merging (found and fixed on real SAM 3.1 output -- see docs/CLAUDE.md)."},
+         "detail": "SpatialMemoryGraph: temporal decay, eviction, spatial re-association, periodic duplicate-node merging (found and fixed on real SAM 3.1 output -- see docs/CLAUDE.md). Class-dependent: static concepts (pole, tree, ...) have zero velocity and long memory; movable ones (person, car, ...) fade in ~1s, get no alert once unseen for 0.75s, and take velocity from a line fit over their current track segment, restarted whenever the segmenter swaps the object under an id."},
         {"id": "ttc", "name": "Geometric TTC", "status": "real",
-         "detail": "distance / closing speed, computed directly in geometry/kinematics.py. No learned model (explicitly not a GATv2/GNN)."},
+         "detail": "distance / closing speed, computed directly in geometry/kinematics.py, plus the horizontal closest point of approach: a closing object only counts as a hazard if it will pass within 0.75m (walking past a pole a metre to the side is not a collision course). No learned model (explicitly not a GATv2/GNN)."},
         {"id": "tts", "name": "SeamlessM4T v2", "status": "real", "model_id": config["tts"]["model_id"],
          "detail": "Real open Meta speech model via transformers. Voicebox/Audiobox were investigated and found not publicly available."},
         {"id": "hud", "name": "Ray-Ban Display output", "status": "simulated",
@@ -128,20 +128,20 @@ system_facts = {
     "body_frame_validation": {
         "frames": {
             "camera_frame": "F_ego -- OpenCV convention, +Z forward, +X right, +Y down.",
-            "body_frame": "F_body -- torso/clock-face frame, +Z = direction of travel from smoothed world-frame velocity, independent of head orientation.",
-            "world_frame": "F_world -- fixed world coordinates from each dataset's own pose source (AEA: MPS SLAM trajectory; SANPO: fixed_camera_poses.csv).",
+            "body_frame": "F_body -- torso/clock-face frame, +Z = direction of travel from a 1s causal window of horizontal world-frame velocity, held through stops, independent of head orientation.",
+            "world_frame": "F_world -- fixed world coordinates from each dataset's own pose source (AEA: MPS SLAM trajectory; SANPO: fixed_camera_poses.csv). Gravity is per dataset: SANPO and AEA are Z-up, the synthetic world is OpenCV-axis (+Y down).",
             "invariant_tested": "A static object's body-frame bearing stays constant under pure camera rotation -- tested directly in tests/test_geometry.py.",
         },
         "transform_consistency_check": {
             "what": "Cross-validated the velocity-derived body-frame heading (core design assumption behind the whole clock-face/body split) against SANPO's literal, independently-measured chest-camera orientation -- the first time this project checked the body-frame approximation against anything other than 'it seems reasonable'.",
-            "result_median_heading_disagreement_degrees": 22,
+            "result_median_heading_disagreement_degrees": 14.7,
             "result_note": "Larger excursions occur during turns, where a velocity-smoothed estimate legitimately lags real-time orientation. This is a median-level agreement with real scatter, not an exact match.",
             "bugs_found_by_this_check": [
                 "Camera intrinsics mixup: description.json's session_camera_details[0] was used unconditionally regardless of requested camera -- silently wrong for camera_chest. Fixed by selecting on `model` name, cross-verified against each camera's documented stereo baseline.",
-                "SANPO's local-forward axis is not OpenCV's +Z, unlike AEA. Found via systematic testing of all 6 candidate signed local axes against real velocity data -- local -X gives a clean ~22deg median residual, every other axis gives 100+ degrees of uncorrelated error.",
+                "SANPO rotation convention (corrected 2026-11-03): an earlier version of this check concluded SANPO's local forward was -X and applied a correction matrix -- which was a reflection (det -1), supported by a yaw measured in the wrong plane (~22deg). Multi-view depth reprojection over all 48 signed axis permutations settles it: the raw quaternion is already OpenCV-camera in a right-handed Z-up world (16% median depth error vs 45% for the old matrix, ~44% chance). User-visible effect of the old matrix on the shipped dashboard run: reported left/right matched the image side 55% of the time; replayed with the fix, 100%.",
             ],
-            "unresolved_caveat": "The up/right axes of SANPO's local rotation convention remain a genuinely open question: the dataset's own feature name (camera_quaternions_right_handed_y_up) implies translation Y is vertical, but the loader's own fixed_camera_poses.csv shows Z is the bounded (vertical-gait-bob) axis and Y is the dominant walking axis -- the opposite of what the name implies. This affects only lateral/vertical placement of lifted 3D points, not depth-along-ray or heading, which is why the heading validation above still holds despite this being unresolved. Full writeup: src/locus/data/sanpo_loader.py module docstring.",
-            "test_reference": "tests/test_sanpo_loader.py::test_velocity_derived_heading_matches_chest_camera_measured_heading",
+            "resolved_caveat": "Earlier versions left SANPO's up axis open (the dataset's camera_quaternions_right_handed_y_up feature name vs. trajectory data showing Z bounded and Y growing). Resolved by the reprojection check above: Z is up. Full writeup: src/locus/data/sanpo_loader.py module docstring.",
+            "test_reference": "tests/test_sanpo_loader.py::test_velocity_derived_heading_matches_chest_camera_measured_heading, ::test_identity_rotation_convention_is_multiview_consistent, ::test_reported_side_matches_image_side",
         },
         "camera_intrinsics": {
             "sanpo_camera_head": {"model": "ZED Mini", "stereo_baseline_mm": 62.958637},

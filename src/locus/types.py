@@ -73,6 +73,12 @@ class Edge:
     bearing_rad: float
     elevation_delta_m: float
     ttc_s: float | None
+    # Closest point of approach, horizontal, if both keep their current
+    # velocities: how far apart the wearer and the object will be at their
+    # nearest, and when. A closing object can still pass well clear (a pole
+    # beside the path); see locus.actuation.directives.on_collision_course.
+    cpa_m: float | None = None
+    tcpa_s: float | None = None
 
 
 @dataclass(frozen=True)

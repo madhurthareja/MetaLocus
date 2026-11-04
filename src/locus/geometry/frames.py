@@ -13,6 +13,16 @@ camera that only rotates (velocity_world unchanged), the body-frame
 bearing stays constant while the ego-frame bearing changes with the
 camera. If that test fails, nothing built on top of frames.py is
 trustworthy.
+
+Gravity is a per-dataset fact, not a constant, so every body-frame
+function takes `world_down` (the world-frame unit vector pointing at the
+ground). F_body itself is OpenCV-shaped -- +X right, +Y down, +Z
+forward -- matching F_ego, so the same `bearing_rad` reads both.
+- synthetic: its world IS the OpenCV camera frame at yaw 0, so world +Y
+  points down -> (0, 1, 0), the default.
+- SANPO and AEA: Z-up worlds -> (0, 0, -1). Using (0, 1, 0) there instead
+  makes "right" a near-vertical axis built from velocity noise, so left
+  and right stop meaning anything real (see docs/CLAUDE.md).
 """
 
 from __future__ import annotations
@@ -21,7 +31,7 @@ import numpy as np
 
 from locus.types import Pose
 
-_WORLD_UP = np.array([0.0, 1.0, 0.0])
+WORLD_DOWN_DEFAULT = np.array([0.0, 1.0, 0.0])  # synthetic / OpenCV-axis worlds
 
 
 def ego_to_world(p_ego: np.ndarray, pose: Pose) -> np.ndarray:
@@ -32,22 +42,42 @@ def world_to_ego(p_world: np.ndarray, pose: Pose) -> np.ndarray:
     return pose.R_world_cam.T @ (p_world - pose.t_world_cam)
 
 
+def horizontal(v: np.ndarray, world_down: np.ndarray = WORLD_DOWN_DEFAULT) -> np.ndarray:
+    """`v` with its component along gravity removed."""
+    return v - np.dot(v, world_down) * world_down
+
+
 def body_rotation_from_velocity(
-    velocity_world: np.ndarray, up_world: np.ndarray = _WORLD_UP
+    velocity_world: np.ndarray, world_down: np.ndarray = WORLD_DOWN_DEFAULT
 ) -> np.ndarray:
-    """Orthonormal world->body basis (as columns) with +Z = direction of travel."""
-    speed = np.linalg.norm(velocity_world)
-    forward = velocity_world / speed if speed > 1e-6 else np.array([0.0, 0.0, 1.0])
-    right = np.cross(up_world, forward)
+    """Orthonormal world->body basis (as columns): +X right, +Y down, +Z =
+    horizontal direction of travel. Only the direction of `velocity_world`
+    is used, never its magnitude.
+
+    No usable horizontal direction (standing still) falls back to an
+    arbitrary horizontal axis so the basis stays finite -- callers that
+    care (generate_dashboard_data.py) pass a held heading instead, see
+    locus.geometry.kinematics.WearerMotion."""
+    forward = horizontal(velocity_world, world_down)
+    if np.linalg.norm(forward) < 1e-6:
+        for candidate in np.eye(3)[::-1]:  # world Z, Y, X -- first one not parallel to gravity
+            forward = horizontal(candidate, world_down)
+            if np.linalg.norm(forward) > 1e-6:
+                break
+    forward = forward / np.linalg.norm(forward)
+    right = np.cross(world_down, forward)
     right /= np.linalg.norm(right)
-    up = np.cross(forward, right)
-    return np.stack([right, up, forward], axis=1)  # R_world_body
+    down = np.cross(forward, right)
+    return np.stack([right, down, forward], axis=1)  # R_world_body
 
 
 def world_to_body(
-    p_world: np.ndarray, body_origin_world: np.ndarray, velocity_world: np.ndarray
+    p_world: np.ndarray,
+    body_origin_world: np.ndarray,
+    velocity_world: np.ndarray,
+    world_down: np.ndarray = WORLD_DOWN_DEFAULT,
 ) -> np.ndarray:
-    r_world_body = body_rotation_from_velocity(velocity_world)
+    r_world_body = body_rotation_from_velocity(velocity_world, world_down)
     return r_world_body.T @ (p_world - body_origin_world)
 
 

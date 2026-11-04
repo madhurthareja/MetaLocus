@@ -52,7 +52,9 @@ function fillBody(el) {
         <ul style="margin:0 0 var(--space-3); padding-left:18px; font-size:12px; color:var(--ink); line-height:1.7;">
           ${bf.transform_consistency_check.bugs_found_by_this_check.map((b) => `<li>${b}</li>`).join('')}
         </ul>
-        <div class="notice-box warn">${icon('triangle-alert')}<span><strong>Unresolved caveat (stated plainly, not hidden):</strong> ${bf.transform_consistency_check.unresolved_caveat}</span></div>
+        ${bf.transform_consistency_check.unresolved_caveat
+          ? `<div class="notice-box warn">${icon('triangle-alert')}<span><strong>Unresolved caveat (stated plainly, not hidden):</strong> ${bf.transform_consistency_check.unresolved_caveat}</span></div>`
+          : `<div class="notice-box">${icon('check-circle')}<span><strong>Previously open, now resolved:</strong> ${bf.transform_consistency_check.resolved_caveat}</span></div>`}
       </div>
     </div>
 

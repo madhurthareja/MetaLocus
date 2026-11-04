@@ -1,21 +1,17 @@
 """Muse Spark 1.3 concept proposer, via Meta's Model API (dev.meta.ai).
 
-The Model API is OpenAI-compatible (confirmed against the actual docs at
-https://dev.meta.ai/docs/protocols/chat-completions and
-https://dev.meta.ai/docs/image-understanding, not assumed): base URL
-https://api.meta.ai/v1, bearer auth, standard `openai` SDK, image input as
-a base64 data URI in a user message's content array, and structured output
-via `response_format` / `client.beta.chat.completions.parse()`.
-
-This is the one piece of the hackathon's own sanctioned Meta Model API
-this project actually calls -- everything else real (SAM 3.1, SeamlessM4T)
-is a local open-weights model.
+The Model API is OpenAI-compatible per https://dev.meta.ai/docs/protocols/
+chat-completions: base URL https://api.meta.ai/v1, bearer auth, the
+standard `openai` SDK, image input as a base64 data URI, and structured
+output via `response_format`/`client.beta.chat.completions.parse()`.
 """
 
 from __future__ import annotations
 
 import base64
 import os
+
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -27,6 +23,20 @@ MODEL_ID = "muse-spark-1.3"
 
 class _ConceptProposal(BaseModel):
     concepts: list[str]
+
+
+class _MotionClassification(BaseModel):
+    concept: str
+    motion_class: Literal["static", "movable"]
+    # Required by the schema either way; read only when motion_class is
+    # "movable" -- a model asked for a nullable-only-sometimes field tends
+    # to fill it in regardless, so the caller enforces the "static -> None"
+    # rule itself rather than trusting this to be null for static concepts.
+    max_speed_mps: float
+
+
+class _MotionClassifications(BaseModel):
+    classifications: list[_MotionClassification]
 
 
 class SparkProposer:
@@ -87,3 +97,48 @@ class SparkProposer:
         )
         parsed = response.choices[0].message.parsed
         return parsed.concepts[: self.max_concepts]
+
+    def classify_motion(self, concepts: list[str]) -> dict[str, tuple[str, float | None]]:
+        """For concepts locus.memory.motion_classes' hardcoded vocabulary
+        doesn't cover: ask whether each is static (never moves on its own)
+        or movable, and if movable, a generous real-world top speed for
+        the category, in an outdoor pedestrian setting. One call for the
+        whole batch, not one per concept -- this runs whenever a new
+        concept enters the tracked vocabulary, not per frame.
+
+        No image: this is a question about the concept in general, not
+        this specific frame, and keeping it text-only means it can run
+        immediately when a concept first appears rather than waiting for
+        another camera frame.
+        """
+        client = self._client_lazy()
+        response = client.beta.chat.completions.parse(
+            model=MODEL_ID,
+            messages=[
+                {
+                    "role": "developer",
+                    "content": (
+                        "For each given object category, decide: can an "
+                        "individual instance of it move under its own power or "
+                        "be driven/ridden (movable), or does it only ever sit "
+                        "in place once installed (static)? Err toward movable "
+                        "when genuinely unsure -- it is safer to watch "
+                        "something that turns out not to move than to ignore "
+                        "something that does. For every category, also give "
+                        "max_speed_mps: a generous (not average) top speed in "
+                        "meters/second a single instance could realistically "
+                        "reach outdoors near a pedestrian -- for a static "
+                        "category this field is still required by the "
+                        "response schema but is ignored by the caller, so "
+                        "answer it plainly rather than agonizing over it."
+                    ),
+                },
+                {"role": "user", "content": "Classify: " + ", ".join(concepts)},
+            ],
+            response_format=_MotionClassifications,
+        )
+        parsed = response.choices[0].message.parsed
+        return {
+            c.concept: (c.motion_class, c.max_speed_mps if c.motion_class == "movable" else None)
+            for c in parsed.classifications
+        }

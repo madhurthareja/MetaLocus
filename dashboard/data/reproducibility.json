@@ -43,7 +43,11 @@
     "sanpo": {
       "role": "primary, scored dataset",
       "sessions_used": [
-        "-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG"
+        "-5OCPnbrwJdu3jH70ieU7pUiFsOJQoeG",
+        "11tnj2tdX_ElmqXEv6kwSXI34_ZWXv-N",
+        "2dVxdA3XmypOsgSWv27dtf3GxjGUkB5A",
+        "CCOQeLblEBD4ICLpXikheOgdG1ALcZdM",
+        "5FV83N_oWfy5whlWhbDUX_2uF2_jx1Pd"
       ],
       "source": "gs://gresearch/sanpo_dataset/v0 (public, ungated, CC-BY 4.0)"
     },
