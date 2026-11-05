@@ -1,79 +1,34 @@
 # Locus
 
-Meta Global AI Developer Hackathon (Indie track). A hazard-warning system
-for outdoor blind/low-vision navigation: first-person video → SAM 3.1
-Object Multiplex segmentation → a persistent, geometric 3D scene graph →
-clock-face audio cues (stereo pan + TTC pulse) and ≤6-word spoken
-directives. Primary dataset is Google's SANPO — built specifically for
-this problem and already powering Project Guideline in production. AEA
-(indoor) runs the identical pipeline as a secondary cross-dataset check.
+Locus is a hazard-warning system for outdoor navigation by blind and
+low-vision users. It takes first-person video and turns it into spoken,
+clock-face directions ("car at 2 o'clock, 3s") about things that matter —
+not a running narration of everything the camera sees.
 
-**Thesis:** frame-level VLM captioning fails systematically on spatial
-questions once the referent leaves view; grounding detections in a
-persistent, segmentation-derived world-frame graph recovers that
-capability. The A/B/C/D ablation in `src/locus/eval/` is built to prove
-(or honestly disprove) this, including the controlled C-vs-D comparison
-(box-lifted vs. mask-lifted instances through the identical persistent
-graph) that isolates whether masks specifically — not just persistence —
-matter.
+The pipeline: first-person video → SAM 3.1 Object Multiplex segmentation
+→ a persistent, geometric 3D scene graph → time-to-collision and
+closest-point-of-approach → stereo-panned audio cues and short spoken
+directives. The primary dataset is Google's SANPO, built specifically for
+outdoor blind/low-vision navigation and already powering Project
+Guideline in production. AEA (indoor) runs the identical pipeline as a
+secondary cross-dataset check.
 
-## Status
+Built for the Meta Global AI Developer Hackathon (Indie track).
 
-| Piece | State |
-|---|---|
-| Geometry (3 reference frames, lifting, kinematics) | Done, tested |
-| Memory graph (persistence, decay, eviction, re-association) | Done, tested |
-| Synthetic data generator | Done — ground-truth harness for the eval conditions |
-| Eval harness (mocks + A/B/C/D conditions + metrics) | Done, tested end-to-end on synthetic scenarios |
-| Audio actuation (stereo-pan + TTC-pulse cues, spoken directives) | Done, tested |
-| Real SANPO loader (dense depth, pinhole intrinsics, no gate) — **primary dataset** | **Done** — ~95-98% depth coverage, real outdoor hazards (e.g. a car at 1.8s TTC) |
-| Real AEA loader (pose + fisheye-undistorted RGB) — secondary, cross-dataset check | Done, verified on all 8 downloaded sequences |
-| Real AEA sparse depth (semi-dense point cloud → per-frame z-buffer) | Done, ~18% pixel coverage (vs. SANPO's ~96%) — a known limitation of AEA specifically |
-| SAM 3.1 native segmenter | **Done** — real session wiring, run successfully on both real SANPO and AEA frames; mask quality verified visually |
-| EdgeTAM live segmenter (`--segmenter edgetam`) | **Done** — genuinely causal/streaming alternative to SAM 3.1's batch pass, for the real-time path; ~10.5 FPS on real SANPO frames (vs. SAM 3.1's 0.17-0.68 FPS). Lower accuracy on long clips (no occlusion re-identification), substantially mitigated by periodic re-grounding |
-| Spoken-directive pacing + dashboard playback speed | **Done** — at most one directive spoken per cooldown window (safety escalation always cuts in); cut one real session from 252 unique spoken clips to 23 |
-| SANPO left/right + hazard-alert noise | **Found and fixed** — SANPO's pose convention was being mirrored (reported side matched image side 55% of the time → 100%); ~94% of critical alerts were velocity noise (static-object jitter, segmenter identity swaps, walking past things) → class-dependent memory, per-segment mover velocity, closest-approach gate. Critical frames on the real session 342 → 0 (the last two were one-frame blips on parked vehicles, removed by a 3-frame hold) |
-| Speech novelty rule | **Done** — each object announced once, again only on a real change (severity up, or a 2+ clock-hour move ahead); spoken cues on the real session 25 → 12 |
-| Complete real-data thread (pose + RGB + depth + segmentation + memory graph + TTC + directives + spoken TTS) | `scripts/generate_dashboard_data.py --dataset {sanpo,aea} [--segmenter sam3.1\|edgetam]` is now the primary entry point (produces a full dashboard session); `scripts/run_real_sequence.py` was the original one-shot proof and still works but is superseded by it |
-| TTS (spoken directives) | **Done** — Meta SeamlessM4T v2 (`src/locus/actuation/tts.py`); Voicebox/Audiobox were investigated and are not actually available |
-| Duplicate-node bug (SAM 3.1 double-tracking one object → two memory-graph nodes) | **Found and fixed** on real data |
-| `app/pipeline.py` (the productionized async version of the above) | Not yet built |
+## Why persistence
 
-Run the test suite: `pytest tests/ -v` (70 tests, all passing as of this
-writing — spans geometry, memory, the eval harness's own thesis-regression
-test, audio actuation, TTS wiring, and real-data integration tests for
-both SANPO and AEA that skip cleanly if the data/network isn't reachable
-from a given machine).
+A camera-only system forgets an object the instant it leaves the frame.
+Locus keeps a world-anchored memory graph instead: an object stays
+tracked — with decaying confidence, eventually evicted — after it's out
+of view, so turning your head doesn't lose track of what's beside you.
+What's safe to remember differs by object: a pole's position is good
+indefinitely, a car's is only good for a second or two, so static and
+moving concepts are tracked with different rules.
 
-Run the ablation harness on synthetic scenarios: `python -m locus.eval.harness`.
-
-Run the complete real thread end to end (real pose, real RGB, real depth,
-real SAM 3.1 segmentation, persistent memory graph, TTC, spoken directives)
-on either dataset:
-```
-# SANPO (outdoor, primary) -- real street hazards
-python scripts/run_real_sequence.py --dataset sanpo --n-frames 40 --concepts "car,person,truck"
-
-# AEA (indoor, cross-dataset check) -- identical pipeline, different sensor
-python scripts/run_real_sequence.py --dataset aea loc5_script4_seq6_rec1 --n-frames 30 --concepts "chair,couch,table"
-```
-
-## Where things live
-
-This repo (`/home/madhur/Desktop/hackathon`) holds the project's own code
-and config — kept here deliberately rather than a fresh directory, since
-this repo already has git history and a pushed GitHub remote.
-
-External resources live elsewhere on this shared DGX box, outside the repo:
-
-| What | Where |
-|---|---|
-| SANPO cache (downloaded per-frame on demand from Google's public GCS bucket) | `/home/iairo-dgx1/vision_datasets/hackathon/sanpo_cache/` |
-| AEA dataset (8 selected sequences: RGB preview, SLAM trajectories/points/calibration, eye gaze, annotations) | `/home/iairo-dgx1/vision_datasets/hackathon/aea/` (manifest: `aea/selected_sequences.json`) |
-| SAM 3 / SAM 3.1 code (`facebookresearch/sam3`, public clone) | `/home/iairo-dgx1/vision_datasets/hackathon/repos/sam3/` |
-| SAM 3.1 Object Multiplex checkpoint (`facebook/sam3.1`, gated on Hugging Face) | gated access approved; pulled via `hf` |
-
-Paths are also recorded in [`config/default.yaml`](config/default.yaml).
+The `src/locus/eval/` ablation ladder (conditions A–D) is the evidence
+for this: a stateless baseline, a short sliding window, and the full
+persistent graph with box- vs. mask-lifted instances, run against the
+same synthetic ground truth.
 
 ## Repo structure
 
@@ -84,12 +39,13 @@ src/locus/
   geometry/          3 reference frames (ego/body/world), intrinsics, mask/box lifting, kinematics/TTC
   memory/            persistent spatial graph: decay, eviction, spatial re-association, edges
   perception/        Segmenter + ConceptProposer protocols; mocks (ground-truth-driven); SAM 3.1 native (batch) + EdgeTAM (live/streaming) backends; real Spark proposer
-  data/              synthetic scenario generator (unit-test harness); real AEA loader (sparse depth); real SANPO loader (dense depth)
+  data/              synthetic scenario generator; real AEA loader (sparse depth); real SANPO loader (dense depth)
   eval/              A/B/C/D ablation conditions, metrics, question generation, CLI harness
-  actuation/         stereo-pan + TTC-pulse audio cues; ≤6-word spoken directives
+  actuation/         stereo-pan + TTC-pulse audio cues; ≤6-word spoken directives; speech pacing policy
   app/               (not yet built) pipeline tying a real sequence to perception → memory → actuation
-tests/              one file per module area; the eval test is a thesis-regression check, not just a unit test
-scripts/            env setup, SAM 3.1 smoke test (not yet filled in)
+tests/              one file per module area
+scripts/            env setup, dashboard data generation, smoke tests
+dashboard/          a browser UI that replays a generated session: camera + segmentation, the 3D memory graph, hazard timeline, system diagnostics
 config/             default.yaml (paths, sequence list, thresholds)
 ```
 
@@ -97,7 +53,46 @@ config/             default.yaml (paths, sequence list, thresholds)
 
 ```
 bash scripts/setup_env.sh      # conda env 'hackathon', Python 3.12, torch cu128, SAM3, projectaria_tools
-hf auth login                  # once facebook/sam3.1 gated access is approved (already done)
+hf auth login                  # once facebook/sam3.1 gated access is approved
 pip install -e ".[dev]"
 pytest tests/ -v
 ```
+
+## Usage
+
+Run the synthetic A/B/C/D ablation:
+```
+python -m locus.eval.harness
+```
+
+Run the complete real thread end to end (real pose, real RGB, real depth,
+real segmentation, persistent memory graph, TTC, spoken directives) on
+either dataset:
+```
+# SANPO (outdoor, primary) -- real street hazards
+python scripts/run_real_sequence.py --dataset sanpo --n-frames 40 --concepts "car,person,truck"
+
+# AEA (indoor, cross-dataset check) -- identical pipeline, different sensor
+python scripts/run_real_sequence.py --dataset aea loc5_script4_seq6_rec1 --n-frames 30 --concepts "chair,couch,table"
+```
+
+Generate a full dashboard session and view it in the browser:
+```
+python scripts/generate_dashboard_data.py --dataset sanpo --segmenter edgetam
+python dashboard/app.py   # then open http://localhost:5050
+```
+
+## Where things live
+
+This repo (`/home/madhur/Desktop/hackathon`) holds the project's own code
+and config. External resources live elsewhere on this shared DGX box,
+outside the repo:
+
+| What | Where |
+|---|---|
+| SANPO cache (downloaded per-frame on demand from Google's public GCS bucket) | `/home/iairo-dgx1/vision_datasets/hackathon/sanpo_cache/` |
+| AEA dataset (8 selected sequences: RGB preview, SLAM trajectories/points/calibration, eye gaze, annotations) | `/home/iairo-dgx1/vision_datasets/hackathon/aea/` (manifest: `aea/selected_sequences.json`) |
+| SAM 3 / SAM 3.1 code (`facebookresearch/sam3`, public clone) | `/home/iairo-dgx1/vision_datasets/hackathon/repos/sam3/` |
+| SAM 3.1 Object Multiplex checkpoint (`facebook/sam3.1`, gated on Hugging Face) | gated access approved; pulled via `hf` |
+
+Paths are also recorded in [`config/default.yaml`](config/default.yaml).
