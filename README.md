@@ -5,10 +5,8 @@ for outdoor blind/low-vision navigation: first-person video → SAM 3.1
 Object Multiplex segmentation → a persistent, geometric 3D scene graph →
 clock-face audio cues (stereo pan + TTC pulse) and ≤6-word spoken
 directives. Primary dataset is Google's SANPO — built specifically for
-this problem and already powering Project Guideline in production, so the
-pitch and the benchmark are the same problem statement, not a proxy (see
-`docs/PROJECT_PLAN.md` §1-3). AEA (indoor) runs the identical pipeline
-unchanged as a cross-dataset generalization check, not the headline.
+this problem and already powering Project Guideline in production. AEA
+(indoor) runs the identical pipeline as a secondary cross-dataset check.
 
 **Thesis:** frame-level VLM captioning fails systematically on spatial
 questions once the referent leaves view; grounding detections in a
@@ -19,33 +17,29 @@ capability. The A/B/C/D ablation in `src/locus/eval/` is built to prove
 graph) that isolates whether masks specifically — not just persistence —
 matter.
 
-Full strategic rationale (pitch, benchmark design, model stack, hackathon
-rules, build schedule): **[docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md)**.
-Day-to-day project context for Claude Code: **[docs/CLAUDE.md](docs/CLAUDE.md)**.
-
 ## Status
 
 | Piece | State |
 |---|---|
 | Geometry (3 reference frames, lifting, kinematics) | Done, tested |
 | Memory graph (persistence, decay, eviction, re-association) | Done, tested |
-| Synthetic data generator | Done — unit-test harness only, not a benchmark substitute |
+| Synthetic data generator | Done — ground-truth harness for the eval conditions |
 | Eval harness (mocks + A/B/C/D conditions + metrics) | Done, tested end-to-end on synthetic scenarios |
 | Audio actuation (stereo-pan + TTC-pulse cues, spoken directives) | Done, tested |
-| Real SANPO loader (dense depth, pinhole intrinsics, no gate) — **primary dataset** | **Done** — ~95-98% depth coverage, real outdoor hazards (e.g. a car at 1.8s TTC); see `docs/CLAUDE.md` |
+| Real SANPO loader (dense depth, pinhole intrinsics, no gate) — **primary dataset** | **Done** — ~95-98% depth coverage, real outdoor hazards (e.g. a car at 1.8s TTC) |
 | Real AEA loader (pose + fisheye-undistorted RGB) — secondary, cross-dataset check | Done, verified on all 8 downloaded sequences |
 | Real AEA sparse depth (semi-dense point cloud → per-frame z-buffer) | Done, ~18% pixel coverage (vs. SANPO's ~96%) — a known limitation of AEA specifically |
-| SAM 3.1 native segmenter | **Done** — real session wiring, run successfully on both real SANPO and AEA frames; mask quality verified visually, not just "it ran" |
-| EdgeTAM live segmenter (`--segmenter edgetam`) | **Done** — genuinely causal/streaming alternative to SAM 3.1's batch pass, for the real-time path; ~10.5 FPS on real SANPO frames (vs. SAM 3.1's 0.17-0.68 FPS). Lower accuracy on long clips (no occlusion re-identification), substantially mitigated by periodic re-grounding — see `docs/CLAUDE.md` for real measured before/after numbers |
-| Spoken-directive pacing + dashboard playback speed | **Done** — at most one directive spoken per cooldown window (safety escalation always cuts in); cut one real session from 252 unique spoken clips to 23. See `docs/CLAUDE.md` |
-| SANPO left/right + hazard-alert noise | **Found and fixed** — SANPO's pose convention was being mirrored (reported side matched image side 55% of the time → 100%); ~94% of critical alerts were velocity noise (static-object jitter, segmenter identity swaps, walking past things) → class-dependent memory, per-segment mover velocity, closest-approach gate. Critical frames on the real session 342 → 0 (the last two were one-frame blips on parked vehicles, removed by a 3-frame hold). See `docs/CLAUDE.md` |
+| SAM 3.1 native segmenter | **Done** — real session wiring, run successfully on both real SANPO and AEA frames; mask quality verified visually |
+| EdgeTAM live segmenter (`--segmenter edgetam`) | **Done** — genuinely causal/streaming alternative to SAM 3.1's batch pass, for the real-time path; ~10.5 FPS on real SANPO frames (vs. SAM 3.1's 0.17-0.68 FPS). Lower accuracy on long clips (no occlusion re-identification), substantially mitigated by periodic re-grounding |
+| Spoken-directive pacing + dashboard playback speed | **Done** — at most one directive spoken per cooldown window (safety escalation always cuts in); cut one real session from 252 unique spoken clips to 23 |
+| SANPO left/right + hazard-alert noise | **Found and fixed** — SANPO's pose convention was being mirrored (reported side matched image side 55% of the time → 100%); ~94% of critical alerts were velocity noise (static-object jitter, segmenter identity swaps, walking past things) → class-dependent memory, per-segment mover velocity, closest-approach gate. Critical frames on the real session 342 → 0 (the last two were one-frame blips on parked vehicles, removed by a 3-frame hold) |
 | Speech novelty rule | **Done** — each object announced once, again only on a real change (severity up, or a 2+ clock-hour move ahead); spoken cues on the real session 25 → 12 |
 | Complete real-data thread (pose + RGB + depth + segmentation + memory graph + TTC + directives + spoken TTS) | `scripts/generate_dashboard_data.py --dataset {sanpo,aea} [--segmenter sam3.1\|edgetam]` is now the primary entry point (produces a full dashboard session); `scripts/run_real_sequence.py` was the original one-shot proof and still works but is superseded by it |
-| TTS (spoken directives) | **Done** — Meta SeamlessM4T v2 (`src/locus/actuation/tts.py`); Voicebox/Audiobox were investigated and are not actually available (see `docs/CLAUDE.md`) |
-| Duplicate-node bug (SAM 3.1 double-tracking one object → two memory-graph nodes) | **Found and fixed** on real data — see `docs/CLAUDE.md` |
+| TTS (spoken directives) | **Done** — Meta SeamlessM4T v2 (`src/locus/actuation/tts.py`); Voicebox/Audiobox were investigated and are not actually available |
+| Duplicate-node bug (SAM 3.1 double-tracking one object → two memory-graph nodes) | **Found and fixed** on real data |
 | `app/pipeline.py` (the productionized async version of the above) | Not yet built |
 
-Run the test suite: `pytest tests/ -v` (55 tests, all passing as of this
+Run the test suite: `pytest tests/ -v` (70 tests, all passing as of this
 writing — spans geometry, memory, the eval harness's own thesis-regression
 test, audio actuation, TTS wiring, and real-data integration tests for
 both SANPO and AEA that skip cleanly if the data/network isn't reachable
@@ -66,9 +60,9 @@ python scripts/run_real_sequence.py --dataset aea loc5_script4_seq6_rec1 --n-fra
 
 ## Where things live
 
-This repo (`/home/madhur/Desktop/hackathon`) holds the project's own code,
-config, and docs — kept here deliberately rather than a fresh directory,
-since this repo already has git history and a pushed GitHub remote.
+This repo (`/home/madhur/Desktop/hackathon`) holds the project's own code
+and config — kept here deliberately rather than a fresh directory, since
+this repo already has git history and a pushed GitHub remote.
 
 External resources live elsewhere on this shared DGX box, outside the repo:
 
@@ -97,7 +91,6 @@ src/locus/
 tests/              one file per module area; the eval test is a thesis-regression check, not just a unit test
 scripts/            env setup, SAM 3.1 smoke test (not yet filled in)
 config/             default.yaml (paths, sequence list, thresholds)
-docs/               PROJECT_PLAN.md, CLAUDE.md
 ```
 
 ## Setup
