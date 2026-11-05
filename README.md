@@ -2,8 +2,7 @@
 
 Locus is a hazard-warning system for outdoor navigation by blind and
 low-vision users. It takes first-person video and turns it into spoken,
-clock-face directions ("car at 2 o'clock, 3s") about things that matter —
-not a running narration of everything the camera sees.
+clock-face directions ("car at 2 o'clock, 3s") about things that matter.
 
 The pipeline: first-person video → SAM 3.1 Object Multiplex segmentation
 → a persistent, geometric 3D scene graph → time-to-collision and
